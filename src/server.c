@@ -516,6 +516,19 @@ server_loop(void)
         for (s = server.sessions; s != NULL; s = snext) {
             snext = s->next;
             if (s->flags & SESSION_DEAD) {
+                log_info("server_loop: destroying dead session %s", s->name);
+
+                /* Notify and detach all clients attached to this session */
+                for (c = server.clients; c != NULL; c = c->next) {
+                    if (c->session == s) {
+                        log_info("server_loop: detaching client %u from dead session", c->id);
+                        pipe_msg_send(c->pipe, MSG_DETACH, NULL, 0);
+                        c->session = NULL;
+                        c->flags |= CLIENT_DEAD;
+                    }
+                }
+
+                /* Remove from session list */
                 if (s == server.sessions)
                     server.sessions = s->next;
                 else {
@@ -627,7 +640,7 @@ server_handle_command(struct client *c, const char *cmdstr)
     ctx.client = c;
     ctx.session = c->session;
 
-    log_debug("server_handle_command: '%s'", cmdstr);
+    log_info("server_handle_command: '%s'", cmdstr);
 
     if (cmd_execute(cmdstr, &ctx) != 0 && ctx.error != NULL) {
         pipe_msg_send(c->pipe, MSG_ERROR, ctx.error,

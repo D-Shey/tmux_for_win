@@ -319,6 +319,9 @@ client_main(const char *pipe_path, int argc, char **argv)
         return 0;
     }
 
+    /* Initialize key bindings (needed for prefix key lookup) */
+    key_init();
+
     /* No command - attach to session */
     if (console_init() != 0) {
         fprintf(stderr,

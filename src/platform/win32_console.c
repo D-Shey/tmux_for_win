@@ -205,6 +205,26 @@ console_read(void *buf, size_t len)
                 continue;
             }
 
+            /* Explicitly handle Ctrl+letter (e.g. Ctrl+B = 0x02).
+             * Some Windows Terminal builds leave uChar.UnicodeChar = 0
+             * for control sequences, so we derive the byte directly from
+             * the virtual key code.  We only do this when no Alt is held
+             * (Alt+Ctrl = AltGr on European keyboards and should not be
+             * intercepted here). */
+            {
+                DWORD ks = ke->dwControlKeyState;
+                int is_ctrl = (ks & LEFT_CTRL_PRESSED) ||
+                              (ks & RIGHT_CTRL_PRESSED);
+                int is_alt  = (ks & LEFT_ALT_PRESSED) ||
+                              (ks & RIGHT_ALT_PRESSED);
+                if (is_ctrl && !is_alt &&
+                    ke->wVirtualKeyCode >= 'A' &&
+                    ke->wVirtualKeyCode <= 'Z') {
+                    p[off++] = (unsigned char)(ke->wVirtualKeyCode - 'A' + 1);
+                    continue;
+                }
+            }
+
             /* Regular character input */
             if (ke->uChar.UnicodeChar != 0) {
                 wchar_t wc = ke->uChar.UnicodeChar;
