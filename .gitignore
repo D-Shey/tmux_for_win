@@ -1,0 +1,16 @@
+# Build artifacts
+build/
+
+# Logs
+logs/
+*.log
+
+# Upstream reference source (not part of build)
+tmux-master/
+
+# OS / IDE
+.vs/
+*.user
+*.suo
+.DS_Store
+Thumbs.db
