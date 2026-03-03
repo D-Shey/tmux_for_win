@@ -45,15 +45,23 @@ grid_destroy(struct grid *gd)
 static void
 grid_ensure_lines(struct grid *gd, uint32_t total)
 {
+    uint32_t old_alloc;
+
     if (total <= gd->linealloc)
         return;
 
+    old_alloc = gd->linealloc;
     gd->linealloc = total + 64;    /* grow by 64 lines */
     gd->linedata = xrealloc(gd->linedata,
         gd->linealloc * sizeof(*gd->linedata));
-    /* Zero new entries */
-    memset(&gd->linedata[total], 0,
-        (gd->linealloc - total) * sizeof(*gd->linedata));
+    /*
+     * Zero ALL newly allocated entries starting from old_alloc.
+     * Previously this zeroed only the last 64 slots [total..total+63],
+     * leaving [old_alloc..total-1] uninitialised — causing crashes when
+     * the grid was accessed after a large resize (e.g. maximize window).
+     */
+    memset(&gd->linedata[old_alloc], 0,
+        (gd->linealloc - old_alloc) * sizeof(*gd->linedata));
 }
 
 /*
