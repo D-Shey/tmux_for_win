@@ -279,12 +279,40 @@ cmd_new_window(struct cmd_ctx *ctx)
 {
     struct session *s = ctx->session;
     struct winlink *wl;
+    const char     *name;
+    const char     *cmd_arg = NULL;
+    int             detach;
+    int             i;
 
     if (s == NULL)
         return -1;
 
-    wl = session_new_window(s, -1, NULL, NULL);
-    s->curw = wl;
+    name   = cmd_get_flag_value(ctx, 'n');
+    detach = cmd_has_flag(ctx, 'd');
+
+    /* First non-flag argument is the command to run in the new window */
+    for (i = 1; i < ctx->argc; i++) {
+        if (ctx->argv[i][0] == '-') {
+            /* -n takes a value — skip both flag and value */
+            if (ctx->argv[i][1] == 'n' && ctx->argv[i][2] == '\0')
+                i++;
+            continue;
+        }
+        cmd_arg = ctx->argv[i];
+        break;
+    }
+
+    wl = session_new_window(s, -1, cmd_arg, NULL);
+
+    if (name != NULL) {
+        free(wl->window->name);
+        wl->window->name = xstrdup(name);
+    }
+
+    /* -d: create window in background, don't switch to it */
+    if (!detach)
+        s->curw = wl;
+
     return 0;
 }
 
@@ -357,6 +385,8 @@ cmd_split_window(struct cmd_ctx *ctx)
     struct window      *w;
     enum layout_type    type = LAYOUT_TOPBOTTOM;
     int                 size = -1;
+    const char         *cmd_arg = NULL;
+    int                 i;
 
     if (s == NULL || s->curw == NULL)
         return -1;
@@ -368,7 +398,19 @@ cmd_split_window(struct cmd_ctx *ctx)
     if (cmd_has_flag(ctx, 'h'))
         type = LAYOUT_LEFTRIGHT;
 
-    window_add_pane(w, type, size, NULL, NULL);
+    /* First non-flag argument is the command to run in the new pane */
+    for (i = 1; i < ctx->argc; i++) {
+        if (ctx->argv[i][0] == '-') {
+            /* -l takes a value — skip both */
+            if (ctx->argv[i][1] == 'l' && ctx->argv[i][2] == '\0')
+                i++;
+            continue;
+        }
+        cmd_arg = ctx->argv[i];
+        break;
+    }
+
+    window_add_pane(w, type, size, cmd_arg, NULL);
     return 0;
 }
 

@@ -40,8 +40,27 @@ pane_create(struct window *w, uint32_t sx, uint32_t sy,
         return wp;
     }
 
+    /*
+     * Build the TMUX environment variable so that processes running inside
+     * tmux-for-win (e.g. Claude Code) can detect they are inside tmux and
+     * call back via "tmux new-window ..." to create agent windows.
+     * Format matches real tmux: TMUX=<socket>,<server_pid>,<session_id>
+     */
+    char  tmux_env[512];
+    char *envp[1];
+    int   nenvp = 0;
+
+    if (server.socket_path != NULL) {
+        snprintf(tmux_env, sizeof(tmux_env),
+            "TMUX=\\\\.\\pipe\\tmux-%s,%lu,0",
+            server.socket_path,
+            (unsigned long)GetCurrentProcessId());
+        envp[nenvp++] = tmux_env;
+    }
+
     /* Spawn the shell */
-    if (conpty_spawn(wp->pty, wp->cmd, wp->cwd, NULL, 0) != 0) {
+    if (conpty_spawn(wp->pty, wp->cmd, wp->cwd,
+        nenvp > 0 ? envp : NULL, nenvp) != 0) {
         log_error("pane_create: cannot spawn process");
         wp->flags |= PANE_DEAD;
     }

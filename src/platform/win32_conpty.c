@@ -117,6 +117,67 @@ fail:
     return NULL;
 }
 
+/*
+ * Build a Windows environment block (sequence of L"KEY=VAL\0" ending with
+ * an extra L'\0') that merges the current process environment with the
+ * caller-supplied extra variables.  The caller must free the returned block.
+ */
+static wchar_t *
+build_env_block(char **extra, int nextra)
+{
+    wchar_t        *parent, *block, *dst;
+    wchar_t       **wextra;
+    size_t         *wlens;
+    size_t          parent_len = 0, extra_len = 0;
+    int             i;
+
+    parent = GetEnvironmentStringsW();
+    if (parent != NULL) {
+        const wchar_t *p = parent;
+        while (*p) {
+            size_t l = wcslen(p) + 1;
+            parent_len += l;
+            p += l;
+        }
+    }
+
+    wextra = xcalloc(nextra, sizeof(wchar_t *));
+    wlens  = xcalloc(nextra, sizeof(size_t));
+    for (i = 0; i < nextra; i++) {
+        int n = MultiByteToWideChar(CP_UTF8, 0, extra[i], -1, NULL, 0);
+        wextra[i] = xcalloc(n, sizeof(wchar_t));
+        MultiByteToWideChar(CP_UTF8, 0, extra[i], -1, wextra[i], n);
+        wlens[i]   = (size_t)n;   /* includes NUL terminator */
+        extra_len += (size_t)n;
+    }
+
+    /* parent_len entries + extra entries + final NUL */
+    block = xcalloc(parent_len + extra_len + 1, sizeof(wchar_t));
+    dst   = block;
+
+    if (parent != NULL) {
+        const wchar_t *p = parent;
+        while (*p) {
+            size_t l = wcslen(p) + 1;
+            memcpy(dst, p, l * sizeof(wchar_t));
+            dst += l;
+            p   += l;
+        }
+        FreeEnvironmentStringsW(parent);
+    }
+
+    for (i = 0; i < nextra; i++) {
+        memcpy(dst, wextra[i], wlens[i] * sizeof(wchar_t));
+        dst += wlens[i];
+        free(wextra[i]);
+    }
+    /* trailing NUL already provided by xcalloc */
+
+    free(wextra);
+    free(wlens);
+    return block;
+}
+
 int
 conpty_spawn(conpty_t *pty, const char *cmd, const char *cwd,
     char **env, int nenv)
@@ -161,19 +222,24 @@ conpty_spawn(conpty_t *pty, const char *cmd, const char *cwd,
     if (cwd != NULL)
         MultiByteToWideChar(CP_UTF8, 0, cwd, -1, wcwd, MAX_PATH);
 
+    /* Build environment block (parent env + any extra vars) */
+    wchar_t *env_block = (nenv > 0) ? build_env_block(env, nenv) : NULL;
+
     /* Create the child process */
     memset(&pi, 0, sizeof(pi));
     if (!CreateProcessW(NULL, wcmd, NULL, NULL, FALSE,
         EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
-        NULL, /* TODO: build environment block from env/nenv */
+        env_block,
         cwd ? wcwd : NULL,
         &si.StartupInfo, &pi)) {
         log_error("conpty_spawn: CreateProcess failed: %lu (cmd=%s)",
             GetLastError(), shell);
+        free(env_block);
         DeleteProcThreadAttributeList(si.lpAttributeList);
         free(si.lpAttributeList);
         return -1;
     }
+    free(env_block);
 
     pty->process = pi.hProcess;
     pty->thread = pi.hThread;
