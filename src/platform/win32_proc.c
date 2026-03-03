@@ -97,14 +97,19 @@ int
 proc_daemonize(void)
 {
     /*
-     * On Windows we can't truly fork(). Instead, we free the console
-     * so the process runs in the background.
+     * On Windows we can't truly fork(). The server is launched with
+     * CREATE_NO_WINDOW so there is no visible console window.
+     *
+     * We must NOT call FreeConsole() here: CreatePseudoConsole requires
+     * the calling process to have a live console session. Calling
+     * FreeConsole() before any ConPTY is created causes cmd.exe (and
+     * other shells) to see their stdin as a closed pipe and exit
+     * immediately with code 0.
+     *
+     * Instead, ignore all console control signals so the server survives
+     * when the client's terminal window is closed.
      */
-    if (!FreeConsole()) {
-        /* Already detached or error - that's fine */
-        log_debug("proc_daemonize: FreeConsole returned %lu",
-            GetLastError());
-    }
+    SetConsoleCtrlHandler(NULL, TRUE);
 
     log_info("proc_daemonize: detached from console");
     return 0;
