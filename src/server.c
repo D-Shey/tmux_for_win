@@ -647,4 +647,7 @@ server_handle_command(struct client *c, const char *cmdstr)
             (uint32_t)strlen(ctx.error));
         free(ctx.error);
     }
+
+    /* Force a redraw so window/pane changes are immediately visible */
+    c->flags |= CLIENT_REDRAW;
 }
