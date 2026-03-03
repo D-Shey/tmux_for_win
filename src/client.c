@@ -320,7 +320,13 @@ client_main(const char *pipe_path, int argc, char **argv)
     }
 
     /* No command - attach to session */
-    console_init();
+    if (console_init() != 0) {
+        fprintf(stderr,
+            "tmux: cannot attach: stdin/stdout must be a Windows console\n"
+            "tmux: run tmux from Windows Terminal, conhost, or another console window\n");
+        pipe_client_free(client_pipe);
+        return 1;
+    }
 
     /* Clear screen and set alternate buffer */
     console_write("\x1b[?1049h\x1b[H\x1b[2J", 15);

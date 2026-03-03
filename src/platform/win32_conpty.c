@@ -274,8 +274,15 @@ conpty_is_alive(conpty_t *pty)
 
     if (pty->process == NULL)
         return 0;
-    if (!GetExitCodeProcess(pty->process, &exit_code))
+    if (!GetExitCodeProcess(pty->process, &exit_code)) {
+        log_error("conpty_is_alive: GetExitCodeProcess failed for pid %lu: %lu",
+            pty->pid, GetLastError());
         return 0;
+    }
+    if (exit_code != STILL_ACTIVE) {
+        log_info("conpty_is_alive: pid %lu exited with code %lu (0x%lx)",
+            pty->pid, exit_code, exit_code);
+    }
     return (exit_code == STILL_ACTIVE);
 }
 

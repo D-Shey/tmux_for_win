@@ -25,20 +25,30 @@ console_init(void)
         return -1;
     }
 
-    /* Save original modes */
-    GetConsoleMode(console_in, &saved_in_mode);
+    /*
+     * Verify stdin is actually a console (not a pipe/file from a
+     * non-interactive parent process such as a bash subprocess).
+     * GetConsoleMode fails with ERROR_INVALID_HANDLE on non-console handles.
+     */
+    if (!GetConsoleMode(console_in, &saved_in_mode)) {
+        log_error("console_init: stdin is not a console (error %lu) — "
+            "tmux requires a Windows terminal (e.g. Windows Terminal, conhost)",
+            GetLastError());
+        return -1;
+    }
     GetConsoleMode(console_out, &saved_out_mode);
 
     /*
      * Set input mode: enable window events, disable line input and echo.
-     * Do NOT enable VT input here, as it intercepts KEY_EVENT records 
+     * Do NOT enable VT input here, as it intercepts KEY_EVENT records
      * making our input loops starve. We process keys manually via ReadConsoleInputW.
      */
-    in_mode = (saved_in_mode | ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT) 
+    in_mode = (saved_in_mode | ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT)
               & ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_VIRTUAL_TERMINAL_INPUT);
-    
+
     if (!SetConsoleMode(console_in, in_mode)) {
-        log_error("console_init: SetConsoleMode input failed: %lu", GetLastError());
+        log_warn("console_init: SetConsoleMode input failed: %lu (continuing with saved mode)",
+            GetLastError());
     }
 
     /*

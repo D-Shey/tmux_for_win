@@ -400,6 +400,7 @@ pipe_msg_recv(pipe_client_t *pc, enum tmux_msg_type *type,
             (unsigned char)pc->read_buf[6], (unsigned char)pc->read_buf[7],
             (unsigned char)pc->read_buf[8], (unsigned char)pc->read_buf[9],
             (unsigned char)pc->read_buf[10], (unsigned char)pc->read_buf[11]);
+        pc->alive = 0;
         return -1;
     }
 

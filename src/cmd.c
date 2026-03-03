@@ -226,7 +226,11 @@ cmd_new_session(struct cmd_ctx *ctx)
     if (name == NULL)
         name = "0";
 
-    s = session_create(name, 80, 24, NULL, NULL);
+    {
+        uint32_t cols = (ctx->client && ctx->client->sx > 0) ? ctx->client->sx : 80;
+        uint32_t rows = (ctx->client && ctx->client->sy > 1) ? ctx->client->sy : 24;
+        s = session_create(name, cols, rows, NULL, NULL);
+    }
     if (ctx->client) {
         ctx->client->session = s;
         ctx->client->flags |= CLIENT_ATTACHED;
