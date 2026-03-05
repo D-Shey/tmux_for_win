@@ -15,3 +15,8 @@ tmux-master/
 .DS_Store
 Thumbs.db
 .claude/
+CLAUDE.md
+
+# Local dev/test scripts
+test_vt.c
+diag.py
