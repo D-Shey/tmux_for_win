@@ -97,15 +97,8 @@ Panes allow you to split the space of a single window into multiple parts.
   - `win32_console.c`: Console mode handling.
   - `win32_proc.c`: Process and session management.
 
-## 📝 Roadmap
-- [ ] Full support for configurable status bar.
-- [ ] Mouse support in the terminal.
-- [ ] Improved pane resizing (resize-pane).
-- [ ] Configuration file support (`.tmux-win.conf`).
-- [ ] Enhanced color and style rendering.
-
 ## 📄 License
-TBD (Inspired by the original tmux license — ISC/BSD).
+This project is a port of the original [tmux](https://github.com/tmux/tmux) and is licensed under the **ISC License**. See the [LICENSE](LICENSE) file for details.
 
 ---
 Developed as a native Windows alternative to terminal multiplexing.
