@@ -88,7 +88,22 @@ main(int argc, char *argv[])
         return server_start(pipe_path);
     }
 
-    /* Client mode */
+    /* Client mode: log to same directory as the executable */
+    {
+        wchar_t wexe[MAX_PATH];
+        char    logpath[MAX_PATH];
+        char   *last_sep;
+        GetModuleFileNameW(NULL, wexe, MAX_PATH);
+        WideCharToMultiByte(CP_UTF8, 0, wexe, -1, logpath, MAX_PATH,
+            NULL, NULL);
+        last_sep = strrchr(logpath, '\\');
+        if (last_sep) strcpy(last_sep + 1, "tmux-client.log");
+        else          strcpy(logpath, "tmux-client.log");
+        log_open_path(logpath);
+    }
+    log_info("main: client mode, pipe_path=%s argc=%d cmd=%s",
+        pipe_path, argc - cmd_start,
+        (cmd_start > 0 ? argv[cmd_start] : "(none)"));
 
     /* If no command is given, default to new-session or attach */
     if (cmd_start == 0) {

@@ -471,6 +471,7 @@ int  xvasprintf(char **, const char *, va_list);
  * ========================================================================= */
 
 void log_open(const char *name);
+void log_open_path(const char *path);
 void log_close(void);
 void log_debug(const char *, ...) printflike(1, 2);
 void log_info(const char *, ...) printflike(1, 2);

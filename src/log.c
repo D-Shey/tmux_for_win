@@ -23,6 +23,21 @@ log_open(const char *name)
     log_info("log opened: %s", path);
 }
 
+/* Open log using a full file path (no .log suffix appended). */
+void
+log_open_path(const char *path)
+{
+    if (path == NULL)
+        return;
+
+    log_file = fopen(path, "a");
+    if (log_file == NULL)
+        return;
+
+    setvbuf(log_file, NULL, _IONBF, 0);
+    log_info("log opened: %s", path);
+}
+
 void
 log_close(void)
 {

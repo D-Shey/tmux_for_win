@@ -189,11 +189,12 @@ client_main(const char *pipe_path, int argc, char **argv)
     int ret;
 
     /* Try to connect to an existing server */
+    log_info("client_main: connecting to pipe_path=%s", pipe_path);
     client_pipe = pipe_client_try_connect(pipe_path);
 
     if (client_pipe == NULL) {
         /* No server running - start one in the background */
-        log_info("client_main: no server, starting one");
+        log_info("client_main: no server at '%s', starting one", pipe_path);
 
         /*
          * On Windows we can't fork, so we launch a new process.

@@ -10,7 +10,17 @@
       "mcp__git__git_init",
       "mcp__git__git_set_working_dir",
       "mcp__git__git_status",
-      "mcp__git__git_commit"
+      "mcp__git__git_commit",
+      "Bash(timeout 5 ./build/Debug/tmux.exe:*)",
+      "Bash(ls:*)",
+      "Bash(export:*)",
+      "Bash(cmd:*)",
+      "Bash(./build/Debug/tmux.exe:*)",
+      "Bash(tasklist.exe:*)",
+      "Bash(taskkill.exe:*)",
+      "Bash(./build/Debug/tmux.exe list-sessions:*)",
+      "Bash(tasklist:*)",
+      "WebSearch"
     ]
   }
 }

@@ -47,7 +47,8 @@ pane_create(struct window *w, uint32_t sx, uint32_t sy,
      * Format matches real tmux: TMUX=<socket>,<server_pid>,<session_id>
      */
     char  tmux_env[512];
-    char *envp[1];
+    char  tmux_pane_env[64];
+    char *envp[2];
     int   nenvp = 0;
 
     if (server.socket_path != NULL) {
@@ -56,6 +57,10 @@ pane_create(struct window *w, uint32_t sx, uint32_t sy,
             server.socket_path,
             (unsigned long)GetCurrentProcessId());
         envp[nenvp++] = tmux_env;
+
+        snprintf(tmux_pane_env, sizeof(tmux_pane_env),
+            "TMUX_PANE=%%%u", wp->id);
+        envp[nenvp++] = tmux_pane_env;
     }
 
     /* Spawn the shell */

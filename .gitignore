@@ -14,3 +14,4 @@ tmux-master/
 *.suo
 .DS_Store
 Thumbs.db
+.claude/

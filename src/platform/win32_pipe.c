@@ -194,7 +194,14 @@ pipe_client_try_connect(const char *pipe_name)
     char            fullname[MAX_PATH];
     HANDLE          pipe;
 
-    snprintf(fullname, sizeof(fullname), "%s%s", PIPE_PREFIX, pipe_name);
+    /* If pipe_name is already a full Windows device path (\\.\...), use it
+     * directly without prepending PIPE_PREFIX.  This handles the case where
+     * Claude Code (or any caller) extracts the socket path from the TMUX
+     * environment variable and passes it verbatim via "tmux -S <path>". */
+    if (pipe_name[0] == '\\' && pipe_name[1] == '\\')
+        snprintf(fullname, sizeof(fullname), "%s", pipe_name);
+    else
+        snprintf(fullname, sizeof(fullname), "%s%s", PIPE_PREFIX, pipe_name);
     MultiByteToWideChar(CP_UTF8, 0, fullname, -1, wname, MAX_PATH);
 
     pipe = CreateFileW(
@@ -239,7 +246,10 @@ pipe_client_connect(const char *pipe_name)
     pc = pipe_client_try_connect(pipe_name);
     if (pc == NULL) {
         char fullname[MAX_PATH];
-        snprintf(fullname, sizeof(fullname), "%s%s", PIPE_PREFIX, pipe_name);
+        if (pipe_name[0] == '\\' && pipe_name[1] == '\\')
+            snprintf(fullname, sizeof(fullname), "%s", pipe_name);
+        else
+            snprintf(fullname, sizeof(fullname), "%s%s", PIPE_PREFIX, pipe_name);
         log_error("pipe_client_connect: cannot connect to %s: %lu",
             fullname, GetLastError());
     }
