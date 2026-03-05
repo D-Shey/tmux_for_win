@@ -1,114 +1,111 @@
 # tmux-win 🪟
 
-Нативный порт **tmux** (терминальный мультиплексор) для Windows, написанный с нуля с использованием Win32 API.
+A native port of **tmux** (terminal multiplexer) for Windows, written from scratch using the Win32 API.
 
-В отличие от запуска tmux через WSL или Cygwin, `tmux-win` является нативным приложением Windows, которое использует **ConPTY** (Windows Pseudo Console) для эмуляции терминала и **Named Pipes** (именованные каналы) для IPC между клиентом и сервером.
+Unlike running tmux via WSL or Cygwin, `tmux-win` is a native Windows application that uses **ConPTY** (Windows Pseudo Console) for terminal emulation and **Named Pipes** for IPC between the client and server.
 
-## ✨ Основные возможности
-- **Нативная производительность**: Отсутствие слоев трансляции, таких как WSL или MSYS2.
-- **Архитектура Клиент-Сервер**: Фоновый сервер управляет сессиями и панелями, в то время как клиент подключается для ввода-вывода.
-- **Постоянные сессии**: Возможность отключаться от сессии и подключаться снова позже без потери прогресса.
-- **Интеграция с ConPTY**: Полная поддержка современных функций терминала Windows.
-- **IPC через Named Pipes**: Эффективное взаимодействие с использованием нативных механизмов Windows.
+## ✨ Key Features
+- **Native Performance**: No translation layers like WSL or MSYS2.
+- **Client-Server Architecture**: A background server manages sessions and panes, while the client connects for I/O.
+- **Persistent Sessions**: Ability to detach from a session and reattach later without losing progress.
+- **ConPTY Integration**: Full support for modern Windows terminal features.
+- **IPC through Named Pipes**: Efficient interaction using native Windows mechanisms.
 
-## 🛠 Предварительные требования
-- **Windows 10 1809+** или **Windows 11** (необходимо для поддержки ConPTY).
-- **Visual Studio 2022** с рабочей нагрузкой "Разработка классических приложений на C++".
+## 🛠 Prerequisites
+- **Windows 10 1809+** or **Windows 11** (required for ConPTY support).
+- **Visual Studio 2022** with the "Desktop development with C++" workload.
 - **CMake 3.20+**.
 
-## 🚀 Начало работы
+## 🚀 Getting Started
 
-### Сборка
-1. Клонируйте репозиторий:
+### Building
+1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/tmux-win.git
-   cd tmux-win
+   git clone https://github.com/D-Shey/tmux_for_win.git
+   cd tmux_for_win
    ```
-2. Настройте и соберите проект с помощью CMake:
+2. Configure and build the project using CMake:
    ```bash
-   # Конфигурация
+   # Configuration
    cmake -B build -G "Visual Studio 17 2022"
 
-   # Сборка (Debug)
+   # Build (Debug)
    cmake --build build --config Debug
 
-   # Сборка (Release)
+   # Build (Release)
    cmake --build build --config Release
    ```
-Бинарный файл будет находиться в `build/Debug/tmux.exe` или `build/Release/tmux.exe`.
+The binary will be located in `build/Debug/tmux.exe` or `build/Release/tmux.exe`.
 
-### Базовое использование
+### Basic Usage
 ```bash
-# Запуск новой сессии (автоматически запускает сервер)
+# Start a new session (automatically starts the server)
 ./build/Debug/tmux.exe
 
-# Подключение к существующей сессии
+# Attach to an existing session
 ./build/Debug/tmux.exe attach
 
-# Разделение текущего окна по горизонтали
+# Split the current window horizontally
 ./build/Debug/tmux.exe split-window -h
 ```
 
-### Горячие клавиши и статус
-Префикс по умолчанию — `Ctrl-b` (стандарт для tmux).
+### Hotkeys and Status
+The default prefix is `Ctrl-b` (standard for tmux).
 
-| Функция | Статус | Клавиши |
+| Feature | Status | Keys |
 | :--- | :--- | :--- |
-| **Новое окно** | ✅ Реализовано | `Ctrl-b c` |
-| **Переключение окон** | ✅ Реализовано | `Ctrl-b n` / `p` / `0-9` |
-| **Сплит горизонтальный** | ✅ Реализовано | `Ctrl-b "` |
-| **Сплит вертикальный** | ✅ Реализовано | `Ctrl-b %` |
-| **Закрыть панель** | ✅ Реализовано | `Ctrl-b x` |
-| **Переключить панель** | ✅ Реализовано | `Ctrl-b o` |
-| **Detach (отключиться)** | ✅ Реализовано | `Ctrl-b d` |
+| **New Window** | ✅ Implemented | `Ctrl-b c` |
+| **Switch Window** | ✅ Implemented | `Ctrl-b n` / `p` / `0-9` |
+| **Horizontal Split** | ✅ Implemented | `Ctrl-b "` |
+| **Vertical Split** | ✅ Implemented | `Ctrl-b %` |
+| **Close Pane** | ✅ Implemented | `Ctrl-b x` |
+| **Switch Pane** | ✅ Implemented | `Ctrl-b o` |
+| **Detach** | ✅ Implemented | `Ctrl-b d` |
 
 ---
 
-### Как это работает
+### How It Works
 
-#### Окна (Windows) — `Ctrl-b c`
-Окна работают как отдельные вкладки в браузере, каждое развернуто на весь экран терминала. Список активных окон отображается в статус-баре снизу.
-- Переключение: `Ctrl-b n` (следующее), `Ctrl-b p` (предыдущее) или по номеру `0-9`.
+#### Windows — `Ctrl-b c`
+Windows work like separate tabs in a browser; each takes up the full terminal screen. The list of active windows is displayed in the status bar at the bottom.
+- Switching: `Ctrl-b n` (next), `Ctrl-b p` (previous), or by number `0-9`.
 
-#### Панели (Panes) — `внутри одного окна`
-Панели позволяют разделить пространство одного окна на несколько частей.
-- `Ctrl-b "` — разделить горизонтально (верх/низ).
-- `Ctrl-b %` — разделить вертикально (лево/право).
-- `Ctrl-b o` — переход к следующей панели.
-- `Ctrl-b x` — закрытие текущей панели.
+#### Panes — `inside a single window`
+Panes allow you to split the space of a single window into multiple parts.
+- `Ctrl-b "` — split horizontally (top/bottom).
+- `Ctrl-b %` — split vertically (left/right).
+- `Ctrl-b o` — move to the next pane.
+- `Ctrl-b x` — close the current pane.
 
 ```text
   ┌─────────────────────┐     ┌──────────┬──────────┐
   │                     │     │          │          │
-  │     Одно окно       │     │  Панель  │  Панель  │
-  │   на весь экран     │     │    1     │    2     │
+  │    Single Window    │     │   Pane   │   Pane   │
+  │      Full Screen    │     │    1     │    2     │
   │                     │     │          │          │
   └─────────────────────┘     └──────────┴──────────┘
      Ctrl-b c (window)           Ctrl-b % (split)
 ```
 
-## 🏗 Архитектура
-`tmux-win` состоит из нескольких модулей:
-- **Server**: Управляет состоянием окон, данными панелей и отрисовкой терминала.
-- **Client**: Обрабатывает ввод с консоли, изменение размера терминала и отображает вывод от сервера.
-- **Platform Layer**: Реализации специфичные для Win32:
-  - `win32_conpty.c`: Управление PTY.
-  - `win32_pipe.c`: Взаимодействие через именованные каналы.
-  - `win32_console.c`: Обработка режимов консоли.
-  - `win32_proc.c`: Управление процессами и сессиями.
+## 🏗 Architecture
+`tmux-win` consists of several modules:
+- **Server**: Manages window states, pane data, and terminal rendering.
+- **Client**: Handles console input, terminal resizing, and displays output from the server.
+- **Platform Layer**: Win32-specific implementations:
+  - `win32_conpty.c`: PTY management.
+  - `win32_pipe.c`: Named pipe interaction.
+  - `win32_console.c`: Console mode handling.
+  - `win32_proc.c`: Process and session management.
 
-## 📝 Планы по развитию
-- [ ] Полная поддержка статус-бара с настройкой.
-- [ ] Поддержка мыши в терминале.
-- [ ] Улучшенное изменение размера панелей (resize-pane).
-- [ ] Поддержка файлов конфигурации (`.tmux-win.conf`).
-- [ ] Улучшенная отрисовка цветов и стилей.
+## 📝 Roadmap
+- [ ] Full support for configurable status bar.
+- [ ] Mouse support in the terminal.
+- [ ] Improved pane resizing (resize-pane).
+- [ ] Configuration file support (`.tmux-win.conf`).
+- [ ] Enhanced color and style rendering.
 
-## 📄 Лицензия
-TBD (Вдохновлено лицензией оригинального tmux — ISC/BSD).
-
----
-Developed as a native Windows alternative to terminal multiplexing.
+## 📄 License
+TBD (Inspired by the original tmux license — ISC/BSD).
 
 ---
 Developed as a native Windows alternative to terminal multiplexing.
