@@ -49,6 +49,20 @@ The binary will be located in `build/Debug/tmux.exe` or `build/Release/tmux.exe`
 ./build/Debug/tmux.exe split-window -h
 ```
 
+### Logging
+
+By default, no log files are created. Pass `-v` to enable logging:
+
+```bash
+# INFO level — creates tmux-client.log and tmux-server.log next to the binary
+./build/Debug/tmux.exe -v
+
+# DEBUG level — more verbose output
+./build/Debug/tmux.exe -v -v
+```
+
+The `-v` flag is automatically forwarded to the server process when it is spawned.
+
 ### Hotkeys and Status
 The default prefix is `Ctrl-b` (standard for tmux).
 

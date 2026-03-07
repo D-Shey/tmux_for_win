@@ -3,7 +3,19 @@
 #include "tmux.h"
 
 static FILE    *log_file;
-static int      log_level = 1;  /* 0=off, 1=info, 2=debug */
+static int      log_level = 0;  /* 0=off, 1=info, 2=debug */
+
+void
+log_set_level(int level)
+{
+    log_level = level;
+}
+
+int
+log_get_level(void)
+{
+    return log_level;
+}
 
 void
 log_open(const char *name)

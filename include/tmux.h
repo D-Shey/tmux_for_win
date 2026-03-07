@@ -470,6 +470,8 @@ int  xvasprintf(char **, const char *, va_list);
  * Function declarations - log.c
  * ========================================================================= */
 
+void log_set_level(int level);
+int  log_get_level(void);
 void log_open(const char *name);
 void log_open_path(const char *path);
 void log_close(void);

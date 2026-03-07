@@ -76,20 +76,24 @@ main(int argc, char *argv[])
 
     /* Server mode */
     if (server_mode) {
-        /* Open log early so we capture any startup errors */
-        log_open("tmux-server");
+        log_set_level(verbose);
+        if (verbose > 0) {
+            /* Open log early so we capture any startup errors */
+            log_open("tmux-server");
+            /* Redirect stderr to a log file for crash diagnostics */
+            freopen("tmux-server-stderr.log", "a", stderr);
+        }
         log_info("main: server mode starting, pipe=%s", pipe_path);
-
-        /* Redirect stderr to a log file for crash diagnostics */
-        freopen("tmux-server-stderr.log", "a", stderr);
 
         /* Detach from console */
         proc_daemonize();
         return server_start(pipe_path);
     }
 
+    log_set_level(verbose);
+
     /* Client mode: log to same directory as the executable */
-    {
+    if (verbose > 0) {
         wchar_t wexe[MAX_PATH];
         char    logpath[MAX_PATH];
         char   *last_sep;

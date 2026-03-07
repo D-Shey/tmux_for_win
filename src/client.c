@@ -218,7 +218,9 @@ client_main(const char *pipe_path, int argc, char **argv)
         }
 
         snprintf(cmd_line, sizeof(cmd_line),
-            "\"%s\" --server --pipe \"%s\"", exe_path_mb, pipe_path);
+            "\"%s\"%s --server --pipe \"%s\"",
+            exe_path_mb, (log_get_level() >= 2 ? " -v -v" : log_get_level() >= 1 ? " -v" : ""),
+            pipe_path);
 
         /* Launch server process */
         STARTUPINFOW si;
