@@ -52,7 +52,86 @@ layout_init(struct window *w, struct window_pane *wp)
 }
 
 /*
- * Apply layout sizes to panes recursively.
+ * Recursively resize a layout cell and all its descendants.
+ * Distributes space evenly among children at each level.
+ */
+static void
+layout_resize_cell(struct layout_cell *lc, uint32_t sx, uint32_t sy)
+{
+    struct layout_cell *child;
+    uint32_t total, remaining, off;
+    int count, idx;
+
+    lc->sx = sx;
+    lc->sy = sy;
+
+    if (lc->type == LAYOUT_WINDOWPANE) {
+        if (lc->wp != NULL) {
+            pane_resize(lc->wp, sx, sy);
+            lc->wp->xoff = lc->xoff;
+            lc->wp->yoff = lc->yoff;
+        }
+        return;
+    }
+
+    /* Count children */
+    count = 0;
+    for (child = lc->first_child; child != NULL;
+        child = child->next_sibling)
+        count++;
+
+    if (count == 0)
+        return;
+
+    if (lc->type == LAYOUT_LEFTRIGHT) {
+        remaining = sx;
+        if (count > 1)
+            remaining -= (count - 1);  /* 1-column borders */
+
+        off = 0;
+        total = 0;
+        idx = 0;
+        for (child = lc->first_child; child != NULL;
+            child = child->next_sibling) {
+            uint32_t child_sx;
+            if (child->next_sibling == NULL)
+                child_sx = remaining - total;
+            else
+                child_sx = (remaining - total) / (count - idx);
+            child->xoff = lc->xoff + off;
+            child->yoff = lc->yoff;
+            layout_resize_cell(child, child_sx, sy);
+            off += child_sx + 1;
+            total += child_sx;
+            idx++;
+        }
+    } else if (lc->type == LAYOUT_TOPBOTTOM) {
+        remaining = sy;
+        if (count > 1)
+            remaining -= (count - 1);
+
+        off = 0;
+        total = 0;
+        idx = 0;
+        for (child = lc->first_child; child != NULL;
+            child = child->next_sibling) {
+            uint32_t child_sy;
+            if (child->next_sibling == NULL)
+                child_sy = remaining - total;
+            else
+                child_sy = (remaining - total) / (count - idx);
+            child->xoff = lc->xoff;
+            child->yoff = lc->yoff + off;
+            layout_resize_cell(child, sx, child_sy);
+            off += child_sy + 1;
+            total += child_sy;
+            idx++;
+        }
+    }
+}
+
+/*
+ * Apply layout sizes to panes recursively (used after individual splits).
  */
 static void
 layout_apply(struct layout_cell *lc)
@@ -71,7 +150,7 @@ layout_apply(struct layout_cell *lc)
 }
 
 /*
- * Resize the entire layout.
+ * Resize the entire layout, distributing space evenly.
  */
 void
 layout_resize(struct window *w, uint32_t sx, uint32_t sy)
@@ -81,160 +160,78 @@ layout_resize(struct window *w, uint32_t sx, uint32_t sy)
     if (lc == NULL)
         return;
 
-    lc->sx = sx;
-    lc->sy = sy;
-
-    /* Recursively resize children based on proportions */
-    if (lc->type == LAYOUT_LEFTRIGHT) {
-        struct layout_cell *child;
-        uint32_t total = 0, remaining = sx;
-        int count = 0;
-
-        /* Count children and borders */
-        for (child = lc->first_child; child != NULL;
-            child = child->next_sibling)
-            count++;
-
-        /* Borders take 1 column each */
-        if (count > 1)
-            remaining -= (count - 1);
-
-        /* Distribute evenly */
-        uint32_t xoff = 0;
-        for (child = lc->first_child; child != NULL;
-            child = child->next_sibling) {
-            uint32_t child_sx;
-            if (child->next_sibling == NULL)
-                child_sx = remaining - total;
-            else
-                child_sx = remaining / count;
-            child->sx = child_sx;
-            child->sy = sy;
-            child->xoff = lc->xoff + xoff;
-            child->yoff = lc->yoff;
-            layout_apply(child);
-            xoff += child_sx + 1;   /* +1 for border */
-            total += child_sx;
-        }
-    } else if (lc->type == LAYOUT_TOPBOTTOM) {
-        struct layout_cell *child;
-        uint32_t total = 0, remaining = sy;
-        int count = 0;
-
-        for (child = lc->first_child; child != NULL;
-            child = child->next_sibling)
-            count++;
-
-        if (count > 1)
-            remaining -= (count - 1);
-
-        uint32_t yoff = 0;
-        for (child = lc->first_child; child != NULL;
-            child = child->next_sibling) {
-            uint32_t child_sy;
-            if (child->next_sibling == NULL)
-                child_sy = remaining - total;
-            else
-                child_sy = remaining / count;
-            child->sx = sx;
-            child->sy = child_sy;
-            child->xoff = lc->xoff;
-            child->yoff = lc->yoff + yoff;
-            layout_apply(child);
-            yoff += child_sy + 1;
-            total += child_sy;
-        }
-    } else {
-        /* Single pane */
-        layout_apply(lc);
-    }
+    lc->xoff = 0;
+    lc->yoff = 0;
+    layout_resize_cell(lc, sx, sy);
 }
 
 /*
- * Split a pane. Creates a new layout structure.
+ * Split a pane. If the parent container already has the same split
+ * direction, add the new pane as a flat sibling (avoiding nested
+ * containers that cause uneven distribution). Otherwise, convert
+ * the current cell into a two-child container.
+ *
+ * After this function returns, the caller should invoke
+ * layout_resize(w, w->sx, w->sy) to redistribute space evenly.
  */
 void
 layout_split_pane(struct window_pane *wp, enum layout_type type,
     int size, struct window_pane *new_wp)
 {
     struct layout_cell *lc = wp->layout_cell;
-    struct layout_cell *parent, *new_lc;
-    uint32_t old_size, new_size;
+    struct layout_cell *new_lc;
 
     if (lc == NULL)
         return;
 
-    /* Calculate sizes */
+    /* Check minimum size */
     if (type == LAYOUT_LEFTRIGHT) {
-        old_size = lc->sx;
-        if (size <= 0 || (uint32_t)size >= old_size)
-            new_size = old_size / 2;
-        else
-            new_size = (uint32_t)size;
+        if (lc->sx < 3)
+            return;
     } else {
-        old_size = lc->sy;
-        if (size <= 0 || (uint32_t)size >= old_size)
-            new_size = old_size / 2;
-        else
-            new_size = (uint32_t)size;
+        if (lc->sy < 3)
+            return;
     }
 
-    /* Check minimum size */
-    if (old_size < 3)   /* too small to split */
+    /*
+     * If the parent container already splits in the same direction,
+     * just add the new pane as a sibling — keep the tree flat.
+     */
+    if (lc->parent != NULL && lc->parent->type == type) {
+        new_lc = layout_create_cell(lc->parent);
+        new_lc->type = LAYOUT_WINDOWPANE;
+        new_lc->wp = new_wp;
+        new_wp->layout_cell = new_lc;
+
+        /* Insert after lc in the sibling list */
+        new_lc->next_sibling = lc->next_sibling;
+        lc->next_sibling = new_lc;
         return;
+    }
 
     /*
-     * Convert the current cell into a container with two children:
-     * the original pane and the new pane.
+     * Otherwise, convert the current cell into a container with two
+     * children: the original pane and the new pane.
      */
-    parent = lc;
-
-    /* Create child for existing pane */
-    struct layout_cell *old_lc = layout_create_cell(parent);
+    struct layout_cell *old_lc = layout_create_cell(lc);
     old_lc->type = LAYOUT_WINDOWPANE;
     old_lc->wp = wp;
+    old_lc->sx = lc->sx;
+    old_lc->sy = lc->sy;
+    old_lc->xoff = lc->xoff;
+    old_lc->yoff = lc->yoff;
     wp->layout_cell = old_lc;
 
-    /* Create child for new pane */
-    new_lc = layout_create_cell(parent);
+    new_lc = layout_create_cell(lc);
     new_lc->type = LAYOUT_WINDOWPANE;
     new_lc->wp = new_wp;
     new_wp->layout_cell = new_lc;
 
-    /* Set up the parent as a container */
-    parent->type = type;
-    parent->wp = NULL;
-    parent->first_child = old_lc;
+    /* Set up lc as a container */
+    lc->type = type;
+    lc->wp = NULL;
+    lc->first_child = old_lc;
     old_lc->next_sibling = new_lc;
-
-    /* Calculate sizes */
-    if (type == LAYOUT_LEFTRIGHT) {
-        uint32_t remaining = parent->sx - 1;   /* 1 for border */
-        old_lc->sx = remaining - new_size;
-        old_lc->sy = parent->sy;
-        old_lc->xoff = parent->xoff;
-        old_lc->yoff = parent->yoff;
-
-        new_lc->sx = new_size;
-        new_lc->sy = parent->sy;
-        new_lc->xoff = parent->xoff + old_lc->sx + 1;
-        new_lc->yoff = parent->yoff;
-    } else {
-        uint32_t remaining = parent->sy - 1;
-        old_lc->sx = parent->sx;
-        old_lc->sy = remaining - new_size;
-        old_lc->xoff = parent->xoff;
-        old_lc->yoff = parent->yoff;
-
-        new_lc->sx = parent->sx;
-        new_lc->sy = new_size;
-        new_lc->xoff = parent->xoff;
-        new_lc->yoff = parent->yoff + old_lc->sy + 1;
-    }
-
-    /* Apply sizes to panes */
-    layout_apply(old_lc);
-    layout_apply(new_lc);
 }
 
 /*

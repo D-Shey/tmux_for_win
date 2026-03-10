@@ -87,6 +87,9 @@ window_add_pane(struct window *w, enum layout_type type,
     /* Update layout */
     layout_split_pane(w->active, type, size, new_wp);
 
+    /* Redistribute space evenly among all panes */
+    layout_resize(w, w->sx, w->sy);
+
     log_info("window_add_pane: pane %u added to window %u",
         new_wp->id, w->id);
     return new_wp;
