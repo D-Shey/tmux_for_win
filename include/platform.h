@@ -74,7 +74,33 @@ enum tmux_msg_type {
     MSG_STDIN,
     MSG_STDOUT,
     MSG_KEY,
+    MSG_MOUSE,
 };
+
+/* Mouse button identifiers */
+#define TMUX_MOUSE_BTN_LEFT   0
+#define TMUX_MOUSE_BTN_MIDDLE 1
+#define TMUX_MOUSE_BTN_RIGHT  2
+#define TMUX_MOUSE_BTN_NONE   3
+
+/* Mouse event flags (bitmask) */
+#define TMUX_MOUSE_PRESS     0x01
+#define TMUX_MOUSE_RELEASE   0x02
+#define TMUX_MOUSE_MOVE      0x04
+#define TMUX_MOUSE_WHEEL_UP  0x08
+#define TMUX_MOUSE_WHEEL_DN  0x10
+#define TMUX_MOUSE_MOD_CTRL  0x20
+#define TMUX_MOUSE_MOD_ALT   0x40
+#define TMUX_MOUSE_MOD_SHIFT 0x80
+
+#pragma pack(push, 1)
+struct tmux_mouse_event {
+    uint32_t x;      /* 1-based terminal column */
+    uint32_t y;      /* 1-based terminal row */
+    uint32_t button; /* TMUX_MOUSE_BTN_* */
+    uint32_t flags;  /* TMUX_MOUSE_* bitmask */
+};
+#pragma pack(pop)
 
 /* Wire protocol message header */
 #pragma pack(push, 1)
@@ -164,6 +190,10 @@ HANDLE console_get_input_handle(void);
 /* Get a resize event if the console was resized.
  * Returns 1 if resized (cols/rows set), 0 otherwise. */
 int console_check_resize(int *cols, int *rows);
+
+/* Poll for a pending mouse event captured during console_read().
+ * Returns 1 and fills *ev if an event is available, 0 otherwise. */
+int console_poll_mouse(struct tmux_mouse_event *ev);
 
 /* =========================================================================
  * Process Management

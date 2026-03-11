@@ -10,6 +10,9 @@ static DWORD    saved_out_mode;
 static int      console_initialized;
 static int      last_cols, last_rows;
 
+static struct tmux_mouse_event s_mouse_ev;
+static int      s_mouse_ready;
+
 int
 console_init(void)
 {
@@ -244,6 +247,48 @@ console_read(void *buf, size_t len)
                 }
             }
 
+        } else if (ir[i].EventType == MOUSE_EVENT) {
+            MOUSE_EVENT_RECORD *me = &ir[i].Event.MouseEvent;
+            struct tmux_mouse_event ev;
+            DWORD ck;
+
+            memset(&ev, 0, sizeof(ev));
+            ev.x = (uint32_t)(me->dwMousePosition.X + 1);
+            ev.y = (uint32_t)(me->dwMousePosition.Y + 1);
+
+            if (me->dwEventFlags & MOUSE_WHEELED) {
+                ev.button = TMUX_MOUSE_BTN_NONE;
+                ev.flags |= (me->dwButtonState & 0x80000000)
+                            ? TMUX_MOUSE_WHEEL_DN : TMUX_MOUSE_WHEEL_UP;
+            } else if (me->dwEventFlags & MOUSE_MOVED) {
+                ev.button = TMUX_MOUSE_BTN_NONE;
+                ev.flags |= TMUX_MOUSE_MOVE;
+            } else {
+                if (me->dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED)
+                    ev.button = TMUX_MOUSE_BTN_LEFT;
+                else if (me->dwButtonState & RIGHTMOST_BUTTON_PRESSED)
+                    ev.button = TMUX_MOUSE_BTN_RIGHT;
+                else if (me->dwButtonState & FROM_LEFT_2ND_BUTTON_PRESSED)
+                    ev.button = TMUX_MOUSE_BTN_MIDDLE;
+                else {
+                    ev.button = TMUX_MOUSE_BTN_NONE;
+                    ev.flags |= TMUX_MOUSE_RELEASE;
+                }
+                if (ev.button != TMUX_MOUSE_BTN_NONE)
+                    ev.flags |= TMUX_MOUSE_PRESS;
+            }
+
+            ck = me->dwControlKeyState;
+            if (ck & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) ev.flags |= TMUX_MOUSE_MOD_CTRL;
+            if (ck & (LEFT_ALT_PRESSED  | RIGHT_ALT_PRESSED))  ev.flags |= TMUX_MOUSE_MOD_ALT;
+            if (ck & SHIFT_PRESSED)                             ev.flags |= TMUX_MOUSE_MOD_SHIFT;
+
+            /* Don't let MOVE overwrite a pending PRESS/RELEASE */
+            if (!(ev.flags & TMUX_MOUSE_MOVE) || !s_mouse_ready) {
+                s_mouse_ev = ev;
+                s_mouse_ready = 1;
+            }
+
         } else if (ir[i].EventType == WINDOW_BUFFER_SIZE_EVENT) {
             /* Terminal resize - will be handled by console_check_resize */
         }
@@ -319,4 +364,14 @@ console_check_resize(int *cols, int *rows)
     }
 
     return 0;
+}
+
+int
+console_poll_mouse(struct tmux_mouse_event *ev)
+{
+    if (!s_mouse_ready)
+        return 0;
+    *ev = s_mouse_ev;
+    s_mouse_ready = 0;
+    return 1;
 }

@@ -380,6 +380,18 @@ input_csi_dispatch(struct input_ctx *ictx, unsigned char final)
             case 1049:  /* alternate screen buffer */
                 screen_alt_on(s);
                 break;
+            case 1000:  /* basic mouse tracking */
+                s->mode |= 0x0800;
+                break;
+            case 1002:  /* button-event mouse tracking */
+                s->mode |= 0x1000;
+                break;
+            case 1003:  /* any-event mouse tracking */
+                s->mode |= 0x4000;
+                break;
+            case 1006:  /* SGR extended coordinates */
+                s->mode |= 0x2000;
+                break;
             case 2004:  /* bracketed paste */
                 s->mode |= 0x400;
                 break;
@@ -395,6 +407,18 @@ input_csi_dispatch(struct input_ctx *ictx, unsigned char final)
                 break;
             case 1049:  /* alternate screen buffer */
                 screen_alt_off(s);
+                break;
+            case 1000:
+                s->mode &= ~0x0800;
+                break;
+            case 1002:
+                s->mode &= ~0x1000;
+                break;
+            case 1003:
+                s->mode &= ~0x4000;
+                break;
+            case 1006:
+                s->mode &= ~0x2000;
                 break;
             case 2004:
                 s->mode &= ~0x400;

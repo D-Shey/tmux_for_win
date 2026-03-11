@@ -82,6 +82,87 @@ client_handle_message(enum tmux_msg_type type, void *data, uint32_t len)
 }
 
 /*
+ * Scan input_buf for xterm SGR mouse sequences: \033[<Cb;Cx;CyM (press)
+ * or \033[<Cb;Cx;Cym (release).  Windows Terminal generates these when
+ * mouse tracking is enabled via \033[?1002h\033[?1006h.
+ * Each sequence found is parsed, sent as MSG_MOUSE, and removed from
+ * the buffer.  Returns the new buffer length after removal.
+ */
+static int
+client_extract_mouse(unsigned char *buf, int len)
+{
+    int i = 0, wp = 0;
+
+    while (i < len) {
+        /* ESC [ < prefix */
+        if (i + 2 < len &&
+            buf[i] == '\033' && buf[i+1] == '[' && buf[i+2] == '<') {
+            /* scan for M (press) or m (release) terminator */
+            int j = i + 3;
+            while (j < len && buf[j] != 'M' && buf[j] != 'm')
+                j++;
+            if (j < len) {
+                /* parse \033[<cb;cx;cy */
+                int cb = 0, cx = 0, cy = 0, field = 0, k;
+                for (k = i + 3; k < j; k++) {
+                    if (buf[k] >= '0' && buf[k] <= '9') {
+                        if      (field == 0) cb = cb * 10 + (buf[k] - '0');
+                        else if (field == 1) cx = cx * 10 + (buf[k] - '0');
+                        else if (field == 2) cy = cy * 10 + (buf[k] - '0');
+                    } else if (buf[k] == ';')
+                        field++;
+                }
+
+                if (field == 2 && cx > 0 && cy > 0) {
+                    struct tmux_mouse_event mev;
+                    int release = (buf[j] == 'm');
+                    int b = cb & 3;
+
+                    memset(&mev, 0, sizeof(mev));
+                    mev.x = (uint32_t)cx;   /* SGR coords are 1-based */
+                    mev.y = (uint32_t)cy;
+
+                    if (cb >= 64) {
+                        /* scroll wheel: 64=up 65=down */
+                        mev.button = TMUX_MOUSE_BTN_NONE;
+                        mev.flags  = (cb == 64)
+                            ? TMUX_MOUSE_WHEEL_UP : TMUX_MOUSE_WHEEL_DN;
+                    } else if (cb & 32) {
+                        /* motion (button may be held) */
+                        mev.button = (b == 0) ? TMUX_MOUSE_BTN_LEFT   :
+                                     (b == 1) ? TMUX_MOUSE_BTN_MIDDLE :
+                                     (b == 2) ? TMUX_MOUSE_BTN_RIGHT  :
+                                                TMUX_MOUSE_BTN_NONE;
+                        mev.flags  = TMUX_MOUSE_MOVE;
+                    } else {
+                        mev.button = (b == 0) ? TMUX_MOUSE_BTN_LEFT   :
+                                     (b == 1) ? TMUX_MOUSE_BTN_MIDDLE :
+                                     (b == 2) ? TMUX_MOUSE_BTN_RIGHT  :
+                                                TMUX_MOUSE_BTN_NONE;
+                        mev.flags  = release
+                            ? TMUX_MOUSE_RELEASE : TMUX_MOUSE_PRESS;
+                    }
+                    if (cb & 4)  mev.flags |= TMUX_MOUSE_MOD_SHIFT;
+                    if (cb & 8)  mev.flags |= TMUX_MOUSE_MOD_ALT;
+                    if (cb & 16) mev.flags |= TMUX_MOUSE_MOD_CTRL;
+
+                    log_debug("client: SGR mouse x=%u y=%u btn=%u flags=0x%x",
+                        mev.x, mev.y, mev.button, mev.flags);
+                    pipe_msg_send(client_pipe, MSG_MOUSE,
+                        &mev, (uint32_t)sizeof(mev));
+                }
+
+                i = j + 1;   /* skip entire sequence */
+                continue;
+            }
+        }
+        buf[wp++] = buf[i++];
+    }
+
+    return wp;
+}
+
+/*
  * Client main loop for an attached session.
  */
 static int
@@ -110,6 +191,22 @@ client_loop(void)
 
         /* Check for console input */
         int nread = console_read(input_buf, sizeof(input_buf));
+
+        /* Extract VT SGR mouse sequences before key processing (Windows Terminal) */
+        if (nread > 0 && client_attached)
+            nread = client_extract_mouse(input_buf, nread);
+
+        /* Win32 mouse fallback (ConHost) */
+        if (client_attached) {
+            struct tmux_mouse_event mev;
+            if (console_poll_mouse(&mev)) {
+                log_debug("client: Win32 mouse x=%u y=%u btn=%u flags=0x%x",
+                    mev.x, mev.y, mev.button, mev.flags);
+                pipe_msg_send(client_pipe, MSG_MOUSE,
+                    &mev, (uint32_t)sizeof(mev));
+            }
+        }
+
         if (nread > 0) {
             if (client_attached) {
                 unsigned char *p = input_buf;
@@ -337,7 +434,14 @@ client_main(const char *pipe_path, int argc, char **argv)
     /* Clear screen and set alternate buffer */
     console_write("\x1b[?1049h\x1b[H\x1b[2J", 15);
 
+    /* Enable button-event (1002) + SGR coordinates (1006) mouse tracking.
+     * Windows Terminal responds by injecting \033[<Cb;Cx;CyM/m into stdin. */
+    console_write("\033[?1002h\033[?1006h", 16);
+
     ret = client_loop();
+
+    /* Disable mouse tracking */
+    console_write("\033[?1002l\033[?1006l", 16);
 
     /* Restore screen */
     console_write("\x1b[?1049l", 8);

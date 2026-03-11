@@ -469,6 +469,76 @@ server_loop(void)
                     }
                     break;
                 }
+                case MSG_MOUSE: {
+                    if (!data || len < sizeof(struct tmux_mouse_event)) break;
+                    if (!c->session || !c->session->curw) break;
+
+                    const struct tmux_mouse_event *mev =
+                        (const struct tmux_mouse_event *)data;
+                    struct window *w = c->session->curw->window;
+                    uint32_t ex = mev->x - 1;   /* convert to 0-based */
+                    uint32_t ey = mev->y - 1;
+                    struct window_pane *wp, *target = NULL;
+
+                    log_debug("MSG_MOUSE: x=%u y=%u btn=%u flags=0x%x "
+                        "(ex=%u ey=%u)",
+                        mev->x, mev->y, mev->button, mev->flags, ex, ey);
+
+                    for (wp = w->panes; wp != NULL; wp = wp->next) {
+                        if (ex >= wp->xoff && ex < wp->xoff + wp->sx &&
+                            ey >= wp->yoff && ey < wp->yoff + wp->sy) {
+                            target = wp;
+                            break;
+                        }
+                    }
+                    if (target == NULL) break;
+
+                    if (target != w->active &&
+                        !(mev->flags & TMUX_MOUSE_MOVE)) {
+                        /* Click on non-active pane: switch focus */
+                        log_debug("MSG_MOUSE: switching active pane to %u",
+                            target->id);
+                        window_set_active_pane(w, target);
+                        c->flags |= CLIENT_REDRAW;
+                        break;
+                    }
+
+                    /* Click/scroll on active pane: forward as SGR if app wants mouse */
+                    wp = w->active;
+                    if (wp == NULL || (wp->flags & PANE_DEAD)) break;
+
+                    /* Check if app enabled any mouse mode */
+                    if (!(wp->screen.mode & 0x7800)) break;
+
+                    /* Suppress motion-only unless any-event mode (1003) */
+                    if ((mev->flags & TMUX_MOUSE_MOVE) &&
+                        !(wp->screen.mode & 0x4000)) break;
+
+                    /* Encode as xterm SGR: ESC [ < Cb ; Cx ; Cy M/m */
+                    {
+                        char sgr[64];
+                        int cb, sgr_len;
+                        int release = (mev->flags & TMUX_MOUSE_RELEASE) != 0;
+                        uint32_t px = mev->x - wp->xoff;
+                        uint32_t py = mev->y - wp->yoff;
+
+                        if (mev->flags & TMUX_MOUSE_WHEEL_UP)      cb = 64;
+                        else if (mev->flags & TMUX_MOUSE_WHEEL_DN) cb = 65;
+                        else if (mev->flags & TMUX_MOUSE_MOVE)     cb = 32 + (int)mev->button;
+                        else                                         cb = (int)mev->button;
+
+                        if (mev->flags & TMUX_MOUSE_MOD_SHIFT) cb += 4;
+                        if (mev->flags & TMUX_MOUSE_MOD_ALT)   cb += 8;
+                        if (mev->flags & TMUX_MOUSE_MOD_CTRL)  cb += 16;
+
+                        sgr_len = snprintf(sgr, sizeof(sgr),
+                            "\033[<%d;%u;%u%c", cb, px, py,
+                            release ? 'm' : 'M');
+                        if (sgr_len > 0)
+                            pane_write(wp, sgr, (size_t)sgr_len);
+                    }
+                    break;
+                }
                 case MSG_DETACH:
                 case MSG_EXIT:
                     c->flags |= CLIENT_DEAD;
