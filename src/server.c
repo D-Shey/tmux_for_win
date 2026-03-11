@@ -507,7 +507,8 @@ server_loop(void)
                     wp = w->active;
                     if (wp == NULL || (wp->flags & PANE_DEAD)) break;
 
-                    /* Check if app enabled any mouse mode */
+                    /* If no app mouse mode active, nothing to do.
+                     * (Proper scroll requires copy mode — not yet implemented.) */
                     if (!(wp->screen.mode & 0x7800)) break;
 
                     /* Suppress motion-only unless any-event mode (1003) */
