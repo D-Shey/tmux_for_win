@@ -28,79 +28,143 @@ server_render_pane(struct window_pane *wp, char *buf, size_t bufsz,
     int             last_bg = COLOUR_DEFAULT_BG;
     uint16_t        last_attr = 0;
 
+    log_debug("render_pane: pane %u, grid=%ux%u, hsize=%u, "
+        "scroll_offset=%u, cy=%u, pane_size=%ux%u, off=%u,%u",
+        wp->id, gd->sx, gd->sy, gd->hsize,
+        wp->scroll_offset, s->cy, wp->sx, wp->sy,
+        wp->xoff, wp->yoff);
+
+    /* Copy mode: precompute selection bounds (absolute lines) */
+    int      in_copy   = (wp->flags & PANE_COPY_MODE) != 0;
+    uint32_t cm_cur_abs = 0;
+    uint32_t cm_sa = 0, cm_sx2 = 0, cm_ea = 0, cm_ex = 0;
+    if (in_copy) {
+        uint32_t hsize = gd->hsize;
+        int      raw   = (int)hsize - (int)wp->scroll_offset + wp->copy_cy;
+        cm_cur_abs = (uint32_t)(raw < 0 ? 0 : raw);
+        if (wp->copy_sel) {
+            cm_sa  = wp->copy_sel_abs;
+            cm_sx2 = wp->copy_sel_x;
+            cm_ea  = cm_cur_abs;
+            cm_ex  = (uint32_t)wp->copy_cx;
+            /* Normalize start <= end */
+            if (cm_sa > cm_ea || (cm_sa == cm_ea && cm_sx2 > cm_ex)) {
+                uint32_t t;
+                t = cm_sa; cm_sa = cm_ea; cm_ea = t;
+                t = cm_sx2; cm_sx2 = cm_ex; cm_ex = t;
+            }
+        }
+    }
+
     for (y = 0; y < gd->sy && y < wp->sy; y++) {
         if ((size_t)off >= bufsz - 64) break;
+
+        /* Compute absolute line index, shifted back by scroll_offset */
+        uint32_t abs_line;
+        if (wp->scroll_offset > 0 && gd->hsize >= wp->scroll_offset)
+            abs_line = gd->hsize - wp->scroll_offset + y;
+        else
+            abs_line = gd->hsize + y;
 
         /* Move cursor to pane position */
         SAFE_SNPRINTF("\033[%u;%uH", wp->yoff + y + 1, wp->xoff + 1);
 
         for (x = 0; x < gd->sx && x < wp->sx; x++) {
-            grid_get_cell(gd, x, y, &gc);
+            grid_get_cell_abs(gd, x, abs_line, &gc);
 
             /* Skip padding cells */
             if (gc.flags & 0x04)
                 continue;
 
-            /* Emit SGR if changed */
-            if (gc.attr != last_attr || gc.fg != last_fg ||
-                gc.bg != last_bg) {
-                SAFE_SNPRINTF("\033[0");
-
-                if (gc.attr & GRID_ATTR_BRIGHT)
-                    SAFE_SNPRINTF(";1");
-                if (gc.attr & GRID_ATTR_DIM)
-                    SAFE_SNPRINTF(";2");
-                if (gc.attr & GRID_ATTR_ITALICS)
-                    SAFE_SNPRINTF(";3");
-                if (gc.attr & GRID_ATTR_UNDERSCORE)
-                    SAFE_SNPRINTF(";4");
-                if (gc.attr & GRID_ATTR_BLINK)
-                    SAFE_SNPRINTF(";5");
-                if (gc.attr & GRID_ATTR_REVERSE)
-                    SAFE_SNPRINTF(";7");
-
-                /* Foreground */
-                if (gc.fg != COLOUR_DEFAULT_FG) {
-                    if (gc.fg & COLOUR_FLAG_RGB) {
-                        SAFE_SNPRINTF(";38;2;%d;%d;%d",
-                            (gc.fg >> 16) & 0xff,
-                            (gc.fg >> 8) & 0xff,
-                            gc.fg & 0xff);
-                    } else if (gc.fg & COLOUR_FLAG_256) {
-                        SAFE_SNPRINTF(";38;5;%d", gc.fg & 0xff);
-                    } else if (gc.fg >= 8) {
-                        SAFE_SNPRINTF(";%d", 90 + (gc.fg - 8));
-                    } else if (gc.fg >= 0) {
-                        SAFE_SNPRINTF(";%d", 30 + gc.fg);
-                    }
+            /* Copy mode: determine cell highlight */
+            int cm_hl = 0; /* 0=none, 1=cursor, 2=selection */
+            if (in_copy) {
+                if ((int)y == wp->copy_cy && (int)x == wp->copy_cx)
+                    cm_hl = 1;
+                else if (wp->copy_sel) {
+                    int sel = 0;
+                    if (abs_line > cm_sa && abs_line < cm_ea)
+                        sel = 1;
+                    else if (cm_sa == cm_ea && abs_line == cm_sa &&
+                        x >= cm_sx2 && x <= cm_ex)
+                        sel = 1;
+                    else if (abs_line == cm_sa && cm_sa != cm_ea &&
+                        x >= cm_sx2)
+                        sel = 1;
+                    else if (abs_line == cm_ea && cm_sa != cm_ea &&
+                        x <= cm_ex)
+                        sel = 1;
+                    if (sel) cm_hl = 2;
                 }
+            }
 
-                /* Background */
-                if (gc.bg != COLOUR_DEFAULT_BG) {
-                    if (gc.bg & COLOUR_FLAG_RGB) {
-                        SAFE_SNPRINTF(";48;2;%d;%d;%d",
-                            (gc.bg >> 16) & 0xff,
-                            (gc.bg >> 8) & 0xff,
-                            gc.bg & 0xff);
-                    } else if (gc.bg & COLOUR_FLAG_256) {
-                        SAFE_SNPRINTF(";48;5;%d", gc.bg & 0xff);
-                    } else if (gc.bg >= 8) {
-                        SAFE_SNPRINTF(";%d", 100 + (gc.bg - 8));
-                    } else if (gc.bg >= 0) {
-                        SAFE_SNPRINTF(";%d", 40 + gc.bg);
+            if (cm_hl != 0) {
+                /* Emit copy mode highlight, force SGR re-emit after */
+                if (cm_hl == 1)
+                    SAFE_SNPRINTF("\033[7m");          /* reverse: cursor */
+                else
+                    SAFE_SNPRINTF("\033[48;5;24m");    /* blue bg: selection */
+                last_attr = 0xFFFF; last_fg = -999; last_bg = -999;
+            } else {
+                /* Emit SGR if changed */
+                if (gc.attr != last_attr || gc.fg != last_fg ||
+                    gc.bg != last_bg) {
+                    SAFE_SNPRINTF("\033[0");
+
+                    if (gc.attr & GRID_ATTR_BRIGHT)     SAFE_SNPRINTF(";1");
+                    if (gc.attr & GRID_ATTR_DIM)        SAFE_SNPRINTF(";2");
+                    if (gc.attr & GRID_ATTR_ITALICS)    SAFE_SNPRINTF(";3");
+                    if (gc.attr & GRID_ATTR_UNDERSCORE) SAFE_SNPRINTF(";4");
+                    if (gc.attr & GRID_ATTR_BLINK)      SAFE_SNPRINTF(";5");
+                    if (gc.attr & GRID_ATTR_REVERSE)    SAFE_SNPRINTF(";7");
+
+                    /* Foreground */
+                    if (gc.fg != COLOUR_DEFAULT_FG) {
+                        if (gc.fg & COLOUR_FLAG_RGB) {
+                            SAFE_SNPRINTF(";38;2;%d;%d;%d",
+                                (gc.fg >> 16) & 0xff,
+                                (gc.fg >> 8) & 0xff,
+                                gc.fg & 0xff);
+                        } else if (gc.fg & COLOUR_FLAG_256) {
+                            SAFE_SNPRINTF(";38;5;%d", gc.fg & 0xff);
+                        } else if (gc.fg >= 8) {
+                            SAFE_SNPRINTF(";%d", 90 + (gc.fg - 8));
+                        } else if (gc.fg >= 0) {
+                            SAFE_SNPRINTF(";%d", 30 + gc.fg);
+                        }
                     }
-                }
 
-                SAFE_SNPRINTF("m");
-                last_attr = gc.attr;
-                last_fg = gc.fg;
-                last_bg = gc.bg;
+                    /* Background */
+                    if (gc.bg != COLOUR_DEFAULT_BG) {
+                        if (gc.bg & COLOUR_FLAG_RGB) {
+                            SAFE_SNPRINTF(";48;2;%d;%d;%d",
+                                (gc.bg >> 16) & 0xff,
+                                (gc.bg >> 8) & 0xff,
+                                gc.bg & 0xff);
+                        } else if (gc.bg & COLOUR_FLAG_256) {
+                            SAFE_SNPRINTF(";48;5;%d", gc.bg & 0xff);
+                        } else if (gc.bg >= 8) {
+                            SAFE_SNPRINTF(";%d", 100 + (gc.bg - 8));
+                        } else if (gc.bg >= 0) {
+                            SAFE_SNPRINTF(";%d", 40 + gc.bg);
+                        }
+                    }
+
+                    SAFE_SNPRINTF("m");
+                    last_attr = gc.attr;
+                    last_fg = gc.fg;
+                    last_bg = gc.bg;
+                }
             }
 
             /* Write the character */
             if (gc.data.have > 0 && (size_t)off + gc.data.have < bufsz) {
                 memcpy(buf + off, gc.data.data, gc.data.have);
                 off += gc.data.have;
+            } else if (gc.data.have == 0) {
+                /* Empty cell — write a space so highlights are visible */
+                if ((size_t)off + 1 < bufsz)
+                    buf[off++] = ' ';
             }
 
             if ((size_t)off >= bufsz - 64)
@@ -175,6 +239,16 @@ server_render_status(struct session *s, uint32_t sx, uint32_t sy,
             break;
     }
 
+    /* Copy mode indicator */
+    if (s->curw && s->curw->window) {
+        struct window_pane *ap = s->curw->window->active;
+        if (ap && (ap->flags & PANE_COPY_MODE)) {
+            uint32_t hsize = ap->screen.grid->hsize;
+            SAFE_SNPRINTF(" \033[1;33m[copy %u/%u]\033[0m\033[30;42m",
+                ap->scroll_offset, hsize);
+        }
+    }
+
     /* Fill the rest of the status line with spaces */
     SAFE_SNPRINTF("\033[K");
 
@@ -203,8 +277,19 @@ server_render_client(struct client *c)
 
     buf = xmalloc(bufsz);
 
+    /* Begin synchronized update: terminal buffers everything until the
+     * matching \033[?2026l, then flips atomically.  Terminals that do not
+     * support DEC PM 2026 silently ignore the sequence. */
+    SAFE_SNPRINTF("\033[?2026h");
+
     /* Hide cursor during rendering */
     SAFE_SNPRINTF("\033[?25l");
+
+    /* After a resize or layout change, clear stale content */
+    if (c->flags & CLIENT_CLEARSCREEN) {
+        SAFE_SNPRINTF("\033[2J");
+        c->flags &= ~CLIENT_CLEARSCREEN;
+    }
 
     /* Render each pane */
     for (wp = w->panes; wp != NULL; wp = wp->next) {
@@ -219,16 +304,19 @@ server_render_client(struct client *c)
     /* Draw status line */
     off += server_render_status(s, c->sx, c->sy, buf + off, bufsz - off);
 
-    /* Position cursor at active pane's cursor */
-    if (w->active != NULL) {
+    /* Position cursor and show/hide based on scroll state */
+    if (w->active != NULL && w->active->scroll_offset == 0) {
         struct screen *sc = &w->active->screen;
         SAFE_SNPRINTF("\033[%u;%uH",
             w->active->yoff + sc->cy + 1,
             w->active->xoff + sc->cx + 1);
+        SAFE_SNPRINTF("\033[?25h");
+    } else {
+        SAFE_SNPRINTF("\033[?25l");   /* hide cursor when in scroll mode */
     }
 
-    /* Show cursor */
-    SAFE_SNPRINTF("\033[?25h");
+    /* End synchronized update — terminal flips the complete frame now */
+    SAFE_SNPRINTF("\033[?2026l");
 
     /* Send to client */
     pipe_msg_send(c->pipe, MSG_STDOUT, buf, (uint32_t)off);
@@ -317,60 +405,26 @@ server_loop(void)
             ever_had_client = 1;
         }
 
-        /* Read from all panes */
-        for (s = server.sessions; s != NULL; s = s->next) {
-            struct winlink *wl;
-            for (wl = s->windows; wl != NULL; wl = wl->next) {
-                if (wl->window == NULL)
-                    continue;
-                for (wp = wl->window->panes; wp != NULL; wp = wp->next) {
-                    if (!(wp->flags & PANE_DEAD))
-                        pane_read(wp);
-
-                    /* Check if child process died */
-                    if (wp->pty && !conpty_is_alive(wp->pty)) {
-                        log_info("server_loop: pane %u (pid %lu) died", 
-                            wp->id, conpty_get_pid(wp->pty));
-                        wp->flags |= PANE_DEAD;
-                    }
-                }
-
-                /* Cleanup dead panes in this window */
-                struct window_pane *wp_next;
-                for (wp = wl->window->panes; wp != NULL; wp = wp_next) {
-                    wp_next = wp->next;
-                    if (wp->flags & PANE_DEAD) {
-                        log_info("server_loop: removing dead pane %u", wp->id);
-                        window_remove_pane(wl->window, wp);
-                    }
-                }
-            }
-
-            /* Cleanup dead windows in this session */
-            struct winlink *wlnk, *wlnk_next;
-            for (wlnk = s->windows; wlnk != NULL; wlnk = wlnk_next) {
-                wlnk_next = wlnk->next;
-                if (wlnk->window->pane_count == 0 || wlnk->window->active == NULL) {
-                    log_info("server_loop: window %u is empty, removing", wlnk->window->id);
-                    /* session_remove_window helper would be better, but we can do it here */
-                    if (wlnk->prev) wlnk->prev->next = wlnk->next;
-                    else s->windows = wlnk->next;
-                    if (wlnk->next) wlnk->next->prev = wlnk->prev;
-                    
-                    if (s->curw == wlnk)
-                        s->curw = s->windows;
-                    
-                    window_destroy(wlnk->window);
-                    free(wlnk);
-                }
-            }
-
-            /* If no windows left, session is dead */
-            if (s->windows == NULL) {
-                log_info("server_loop: session %s has no windows, marking dead", s->name);
-                s->flags |= SESSION_DEAD;
+        /*
+         * Safety net for CLIENT_RESIZE_PENDING: if a resize happened in a
+         * previous iteration and ConPTY still hasn't produced reflow data
+         * (no PANE_REDRAW triggered), promote to CLIENT_REDRAW so the
+         * user doesn't stare at a blank screen forever.
+         */
+        for (c = server.clients; c != NULL; c = c->next) {
+            if (c->flags & CLIENT_RESIZE_PENDING) {
+                c->flags &= ~CLIENT_RESIZE_PENDING;
+                c->flags |= CLIENT_REDRAW;
             }
         }
+
+        /*
+         * Process client messages BEFORE reading panes.
+         * This ensures MSG_RESIZE → conpty_resize happens first, then
+         * pane_read() picks up ConPTY reflow output in the same iteration,
+         * so the render shows correct post-reflow content.
+         */
+        int resize_happened = 0;
 
         /* Process client messages */
         for (c = server.clients; c != NULL; c = cnext) {
@@ -429,14 +483,25 @@ server_loop(void)
                     break;
                 }
                 case MSG_KEY: {
-                    /* Input from client */
                     if (data && len > 0 && c->session &&
                         c->session->curw && c->session->curw->window) {
                         struct window *w = c->session->curw->window;
-                        if (w->active && !(w->active->flags & PANE_DEAD))
-                            pane_write(w->active, data, len);
+                        if (w->active && !(w->active->flags & PANE_DEAD)) {
+                            if (w->active->flags & PANE_COPY_MODE) {
+                                /* Copy mode: handle key locally */
+                                copy_mode_handle_key(w->active, c,
+                                    (const unsigned char *)data, (int)len);
+                            } else {
+                                /* Return to live view on any keypress */
+                                if (w->active->scroll_offset > 0) {
+                                    w->active->scroll_offset = 0;
+                                    c->flags |= CLIENT_REDRAW;
+                                }
+                                pane_write(w->active, data, len);
+                                c->flags |= CLIENT_REDRAW;
+                            }
+                        }
                     }
-                    c->flags |= CLIENT_REDRAW;
                     break;
                 }
                 case MSG_COMMAND: {
@@ -453,19 +518,37 @@ server_loop(void)
                 case MSG_RESIZE: {
                     if (data && len >= 8) {
                         uint32_t *sizes = (uint32_t *)data;
+                        uint32_t old_cx = c->sx, old_cy_c = c->sy;
                         c->sx = sizes[0];
                         c->sy = sizes[1];
+                        log_debug("MSG_RESIZE: client %u, %ux%u -> %ux%u",
+                            c->id, old_cx, old_cy_c, c->sx, c->sy);
                         if (c->session) {
                             c->session->sx = c->sx;
                             c->session->sy = c->sy;
+                            uint32_t win_sy = c->sy > 1 ? c->sy - 1 : 1;
+                            log_debug("MSG_RESIZE: resizing windows to "
+                                "%ux%u (status row reserved)",
+                                c->sx, win_sy);
                             struct winlink *wl;
                             for (wl = c->session->windows; wl;
                                 wl = wl->next) {
-                                window_resize(wl->window, c->sx,
-                                    c->sy > 1 ? c->sy - 1 : 1);
+                                window_resize(wl->window, c->sx, win_sy);
                             }
                         }
-                        c->flags |= CLIENT_REDRAW;
+                        /*
+                         * ConPTY reflow arrives ~50-100ms after
+                         * ResizePseudoConsole — long after pane_read runs.
+                         * Block ALL rendering (including PANE_REDRAW) until
+                         * the next loop iteration, by which time reflow
+                         * data has arrived and pane_read will process it.
+                         *
+                         * Clear any pending REDRAW so it doesn't sneak
+                         * through the render gate this iteration.
+                         */
+                        c->flags = (c->flags & ~CLIENT_REDRAW)
+                            | CLIENT_CLEARSCREEN | CLIENT_RESIZE_PENDING;
+                        resize_happened = 1;
                     }
                     break;
                 }
@@ -493,6 +576,30 @@ server_loop(void)
                     }
                     if (target == NULL) break;
 
+                    /* --- Scroll wheel: handle without switching focus --- */
+                    if (mev->flags & (TMUX_MOUSE_WHEEL_UP | TMUX_MOUSE_WHEEL_DN)) {
+                        wp = target;
+                        if (wp->flags & PANE_DEAD) break;
+
+                        if (wp->screen.mode & 0x7800) {
+                            /* App mouse mode active (e.g. vim) — forward as SGR */
+                            goto sgr_forward;
+                        }
+
+                        /* Tmux-level scrollback: 3 lines per wheel click */
+                        if (mev->flags & TMUX_MOUSE_WHEEL_UP) {
+                            wp->scroll_offset += 3;
+                            if (wp->scroll_offset > wp->screen.grid->hsize)
+                                wp->scroll_offset = wp->screen.grid->hsize;
+                        } else {
+                            wp->scroll_offset = (wp->scroll_offset > 3)
+                                ? wp->scroll_offset - 3 : 0;
+                        }
+                        c->flags |= CLIENT_REDRAW;
+                        break;
+                    }
+
+                    /* --- Click/drag: focus-switch or SGR forward --- */
                     if (target != w->active &&
                         !(mev->flags & TMUX_MOUSE_MOVE)) {
                         /* Click on non-active pane: switch focus */
@@ -503,12 +610,10 @@ server_loop(void)
                         break;
                     }
 
-                    /* Click/scroll on active pane: forward as SGR if app wants mouse */
                     wp = w->active;
                     if (wp == NULL || (wp->flags & PANE_DEAD)) break;
 
-                    /* If no app mouse mode active, nothing to do.
-                     * (Proper scroll requires copy mode — not yet implemented.) */
+                    /* If no app mouse mode active, nothing to do. */
                     if (!(wp->screen.mode & 0x7800)) break;
 
                     /* Suppress motion-only unless any-event mode (1003) */
@@ -516,6 +621,7 @@ server_loop(void)
                         !(wp->screen.mode & 0x4000)) break;
 
                     /* Encode as xterm SGR: ESC [ < Cb ; Cx ; Cy M/m */
+sgr_forward:;
                     {
                         char sgr[64];
                         int cb, sgr_len;
@@ -552,10 +658,74 @@ server_loop(void)
             }
         }
 
+        /* Read from all panes.
+         * Runs AFTER message processing so that ConPTY reflow output
+         * generated by MSG_RESIZE → conpty_resize is available here. */
+        for (s = server.sessions; s != NULL; s = s->next) {
+            struct winlink *wl;
+            for (wl = s->windows; wl != NULL; wl = wl->next) {
+                if (wl->window == NULL)
+                    continue;
+                for (wp = wl->window->panes; wp != NULL; wp = wp->next) {
+                    if (!(wp->flags & PANE_DEAD))
+                        pane_read(wp);
+
+                    /* Check if child process died */
+                    if (wp->pty && !conpty_is_alive(wp->pty)) {
+                        log_info("server_loop: pane %u (pid %lu) died",
+                            wp->id, conpty_get_pid(wp->pty));
+                        wp->flags |= PANE_DEAD;
+                    }
+                }
+
+                /* Cleanup dead panes in this window */
+                struct window_pane *wp_next;
+                for (wp = wl->window->panes; wp != NULL; wp = wp_next) {
+                    wp_next = wp->next;
+                    if (wp->flags & PANE_DEAD) {
+                        log_info("server_loop: removing dead pane %u", wp->id);
+                        window_remove_pane(wl->window, wp);
+                    }
+                }
+            }
+
+            /* Cleanup dead windows in this session */
+            struct winlink *wlnk, *wlnk_next;
+            for (wlnk = s->windows; wlnk != NULL; wlnk = wlnk_next) {
+                wlnk_next = wlnk->next;
+                if (wlnk->window->pane_count == 0 || wlnk->window->active == NULL) {
+                    log_info("server_loop: window %u is empty, removing", wlnk->window->id);
+                    if (wlnk->prev) wlnk->prev->next = wlnk->next;
+                    else s->windows = wlnk->next;
+                    if (wlnk->next) wlnk->next->prev = wlnk->prev;
+
+                    if (s->curw == wlnk)
+                        s->curw = s->windows;
+
+                    window_destroy(wlnk->window);
+                    free(wlnk);
+                }
+            }
+
+            /* If no windows left, session is dead */
+            if (s->windows == NULL) {
+                log_info("server_loop: session %s has no windows, marking dead", s->name);
+                s->flags |= SESSION_DEAD;
+            }
+        }
+
         /* Render for clients that need redraw */
         for (c = server.clients; c != NULL; c = c->next) {
             if ((c->flags & CLIENT_ATTACHED) &&
                 (c->flags & CLIENT_IDENTIFIED)) {
+
+                /* Skip render entirely while resize is pending.
+                 * ConPTY reflow data (~76ms) hasn't arrived yet;
+                 * rendering now would show pre-reflow content.
+                 * The safety net at the top of the next iteration
+                 * promotes RESIZE_PENDING → REDRAW after one cycle. */
+                if (c->flags & CLIENT_RESIZE_PENDING)
+                    continue;
 
                 /* Check if any panes need redraw */
                 int need_redraw = (c->flags & CLIENT_REDRAW);
@@ -711,6 +881,10 @@ server_handle_command(struct client *c, const char *cmdstr)
     ctx.client = c;
     ctx.session = c->session;
 
+    /* Command-only clients have no session; use first available */
+    if (ctx.session == NULL)
+        ctx.session = server.sessions;
+
     log_info("server_handle_command: '%s'", cmdstr);
 
     if (cmd_execute(cmdstr, &ctx) != 0 && ctx.error != NULL) {
@@ -719,6 +893,14 @@ server_handle_command(struct client *c, const char *cmdstr)
         free(ctx.error);
     }
 
-    /* Force a redraw so window/pane changes are immediately visible */
-    c->flags |= CLIENT_REDRAW;
+    /*
+     * For non-attached clients (command-only, e.g. `tmux send-keys ...`),
+     * always send an empty MSG_DATA so the client's response loop exits
+     * immediately instead of waiting 5 seconds for a timeout.
+     */
+    if (!(c->flags & CLIENT_ATTACHED))
+        pipe_msg_send(c->pipe, MSG_DATA, NULL, 0);
+
+    /* Force a full redraw after command execution (layout may have changed). */
+    c->flags |= CLIENT_REDRAW | CLIENT_CLEARSCREEN;
 }

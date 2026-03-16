@@ -191,6 +191,11 @@ HANDLE console_get_input_handle(void);
  * Returns 1 if resized (cols/rows set), 0 otherwise. */
 int console_check_resize(int *cols, int *rows);
 
+/* Enable or disable Win32 mouse input capture.
+ * When disabled (default), the terminal can perform native text selection.
+ * When enabled, click-to-focus and scroll work but text selection requires Shift. */
+void console_set_mouse(int enabled);
+
 /* Poll for a pending mouse event captured during console_read().
  * Returns 1 and fills *ev if an event is available, 0 otherwise. */
 int console_poll_mouse(struct tmux_mouse_event *ev);

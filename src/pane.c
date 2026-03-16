@@ -4,6 +4,9 @@
 
 static uint32_t next_pane_id = 0;
 
+/* Max bytes to drain from ConPTY in a single batch (256KB). */
+#define PANE_READ_MAX (256 * 1024)
+
 static void
 pane_write_cb(void *arg, const void *buf, size_t len)
 {
@@ -98,41 +101,83 @@ pane_resize(struct window_pane *wp, uint32_t sx, uint32_t sy)
     if (sx < 1) sx = 1;
     if (sy < 1) sy = 1;
 
+    log_debug("pane_resize: pane %u, %ux%u -> %ux%u, scroll_offset=%u, "
+        "hsize=%u, cy=%u",
+        wp->id, wp->sx, wp->sy, sx, sy,
+        wp->scroll_offset, wp->screen.grid->hsize, wp->screen.cy);
+
     wp->sx = sx;
     wp->sy = sy;
 
     screen_resize(&wp->screen, sx, sy);
 
+    /* Clamp scroll_offset to current history size */
+    if (wp->scroll_offset > wp->screen.grid->hsize)
+        wp->scroll_offset = wp->screen.grid->hsize;
+
+    /*
+     * Tell ConPTY the new size.  ConPTY will generate reflow VT output
+     * asynchronously; it will be picked up by the normal pane_read()
+     * in the next server loop iteration.  We do NOT drain here because
+     * ResizePseudoConsole is async and PeekNamedPipe would race.
+     * The client clears its screen immediately on resize, so the user
+     * sees a clean slate until the server sends the first post-resize
+     * render (which includes the reflow data processed by pane_read).
+     */
     if (wp->pty != NULL)
         conpty_resize(wp->pty, sx, sy);
+
+    log_debug("pane_resize: pane %u DONE, grid=%ux%u, hsize=%u, cy=%u, "
+        "scroll_offset=%u",
+        wp->id, wp->screen.grid->sx, wp->screen.grid->sy,
+        wp->screen.grid->hsize, wp->screen.cy, wp->scroll_offset);
 }
 
 /*
  * Read available data from the pane's ConPTY and parse VT sequences.
+ * Drains ALL available data (up to a limit) to avoid rendering intermediate
+ * states — critical during resize/split when ConPTY sends a large reflow.
  * Returns bytes read, 0 if no data, -1 if dead.
  */
 int
 pane_read(struct window_pane *wp)
 {
     unsigned char buf[8192];
-    int n;
+    int n, total = 0;
+    uint32_t old_hsize;
 
     if (wp->pty == NULL || (wp->flags & PANE_DEAD))
         return -1;
 
-    n = conpty_read(wp->pty, buf, sizeof(buf));
-    if (n < 0) {
-        wp->flags |= PANE_DEAD;
-        return -1;
+    old_hsize = wp->screen.grid->hsize;
+
+    /* Drain all available ConPTY output so the next render shows the
+     * final state rather than an intermediate frame. */
+    do {
+        n = conpty_read(wp->pty, buf, sizeof(buf));
+        if (n < 0) {
+            wp->flags |= PANE_DEAD;
+            return total > 0 ? total : -1;
+        }
+        if (n == 0)
+            break;
+        input_parse(wp->ictx, buf, n);
+        total += n;
+    } while (total < PANE_READ_MAX);
+
+    if (total > 0) {
+        /* Compensate scroll offset for any new history lines */
+        if (wp->scroll_offset > 0) {
+            uint32_t new_hsize = wp->screen.grid->hsize;
+            if (new_hsize > old_hsize)
+                wp->scroll_offset += new_hsize - old_hsize;
+            if (wp->scroll_offset > wp->screen.grid->hsize)
+                wp->scroll_offset = wp->screen.grid->hsize;
+        }
+        wp->flags |= PANE_REDRAW;
     }
-    if (n == 0)
-        return 0;
 
-    /* Parse the VT output */
-    input_parse(wp->ictx, buf, n);
-    wp->flags |= PANE_REDRAW;
-
-    return n;
+    return total;
 }
 
 /*

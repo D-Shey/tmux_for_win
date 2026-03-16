@@ -5,6 +5,7 @@
 static int          client_running;
 static pipe_client_t *client_pipe;
 static int          client_attached;
+static int          client_mouse_enabled;
 
 /*
  * Send the identify message to the server with terminal size.
@@ -163,6 +164,22 @@ client_extract_mouse(unsigned char *buf, int len)
 }
 
 /*
+ * Toggle mouse mode on/off.
+ * Enables/disables both Win32 ENABLE_MOUSE_INPUT and VT SGR mouse tracking.
+ */
+static void
+client_toggle_mouse(void)
+{
+    client_mouse_enabled = !client_mouse_enabled;
+    console_set_mouse(client_mouse_enabled);
+    if (client_mouse_enabled)
+        console_write("\033[?1002h\033[?1006h", 16);
+    else
+        console_write("\033[?1002l\033[?1006l", 16);
+    log_info("client: mouse mode %s", client_mouse_enabled ? "on" : "off");
+}
+
+/*
  * Client main loop for an attached session.
  */
 static int
@@ -219,8 +236,13 @@ client_loop(void)
                         const char *cmd = key_lookup("prefix", key);
 
                         if (cmd != NULL) {
-                            pipe_msg_send(client_pipe, MSG_COMMAND,
-                                cmd, (uint32_t)strlen(cmd));
+                            /* toggle-mouse is a client-side command */
+                            if (strcmp(cmd, "toggle-mouse") == 0) {
+                                client_toggle_mouse();
+                            } else {
+                                pipe_msg_send(client_pipe, MSG_COMMAND,
+                                    cmd, (uint32_t)strlen(cmd));
+                            }
                         } else {
                             /* Unknown prefix key - send as input */
                             pipe_msg_send(client_pipe, MSG_KEY, p, 1);
@@ -252,6 +274,14 @@ client_loop(void)
         /* Check for console resize */
         int new_cols, new_rows;
         if (console_check_resize(&new_cols, &new_rows)) {
+            /*
+             * Clear screen immediately so the user sees a clean slate
+             * while waiting for the server's post-resize render.
+             * Without this, the console may show stale/reflowed content
+             * that looks like a scroll glitch.
+             */
+            console_write("\033[2J\033[H", 7);
+
             uint32_t sizes[2] = { (uint32_t)new_cols, (uint32_t)new_rows };
             pipe_msg_send(client_pipe, MSG_RESIZE, sizes, sizeof(sizes));
         }
@@ -376,13 +406,19 @@ client_main(const char *pipe_path, int argc, char **argv)
 
     /* If we have a command to send */
     if (argc > 0) {
-        /* Build command string */
+        /* Build command string, quoting args that contain spaces */
         char cmd[4096] = "";
         int i;
         for (i = 0; i < argc; i++) {
             if (i > 0)
                 strlcat(cmd, " ", sizeof(cmd));
-            strlcat(cmd, argv[i], sizeof(cmd));
+            if (strchr(argv[i], ' ') != NULL) {
+                strlcat(cmd, "\"", sizeof(cmd));
+                strlcat(cmd, argv[i], sizeof(cmd));
+                strlcat(cmd, "\"", sizeof(cmd));
+            } else {
+                strlcat(cmd, argv[i], sizeof(cmd));
+            }
         }
 
         /* Send command and wait for response */
@@ -435,12 +471,14 @@ client_main(const char *pipe_path, int argc, char **argv)
     console_write("\x1b[?1049h\x1b[H\x1b[2J", 15);
 
     /* Enable button-event (1002) + SGR coordinates (1006) mouse tracking.
-     * Windows Terminal responds by injecting \033[<Cb;Cx;CyM/m into stdin. */
+     * Windows Terminal responds by injecting \033[<Cb;Cx;CyM/m into stdin.
+     * Use Shift+drag to select text while mouse mode is active. */
     console_write("\033[?1002h\033[?1006h", 16);
+    client_mouse_enabled = 1;
 
     ret = client_loop();
 
-    /* Disable mouse tracking */
+    /* Disable mouse tracking on exit */
     console_write("\033[?1002l\033[?1006l", 16);
 
     /* Restore screen */

@@ -54,14 +54,20 @@ main(int argc, char *argv[])
             pipe_path = argv[++i];
         } else if (strcmp(argv[i], "-S") == 0 && i + 1 < argc) {
             pipe_path = argv[++i];
-        } else if (strcmp(argv[i], "-v") == 0) {
-            verbose++;
+        } else if (strcmp(argv[i], "-L") == 0 && i + 1 < argc) {
+            /* Socket/session name — ignore, we use default pipe */
+            i++;
+        } else if (argv[i][0] == '-' && argv[i][1] == 'v' &&
+                   argv[i][strspn(argv[i] + 1, "v") + 1] == '\0') {
+            /* Accept -v, -vv, -vvv etc. */
+            verbose += (int)strspn(argv[i] + 1, "v");
         } else if (strcmp(argv[i], "-h") == 0 ||
                    strcmp(argv[i], "--help") == 0) {
             usage();
             return 0;
-        } else if (strcmp(argv[i], "--version") == 0) {
-            printf("tmux %s (Windows)\n", TMUX_VERSION);
+        } else if (strcmp(argv[i], "--version") == 0 ||
+                   strcmp(argv[i], "-V") == 0) {
+            printf("tmux %s\n", TMUX_VERSION);
             return 0;
         } else {
             /* First non-flag argument starts the command */
@@ -135,6 +141,17 @@ main(int argc, char *argv[])
 
     if (strcmp(cmd_name, "new") == 0 ||
         strcmp(cmd_name, "new-session") == 0) {
+        /* -d flag: create session detached (no console required) */
+        int detached = 0;
+        int j;
+        for (j = cmd_start + 1; j < argc; j++) {
+            if (strcmp(argv[j], "-d") == 0) {
+                detached = 1;
+                break;
+            }
+        }
+        if (detached)
+            return client_main(pipe_path, argc - cmd_start, argv + cmd_start);
         /* Start client which will create a session */
         return client_main(pipe_path, 0, NULL);
     }

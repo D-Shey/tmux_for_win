@@ -9,6 +9,7 @@ static DWORD    saved_in_mode;
 static DWORD    saved_out_mode;
 static int      console_initialized;
 static int      last_cols, last_rows;
+static int      mouse_enabled;
 
 static struct tmux_mouse_event s_mouse_ev;
 static int      s_mouse_ready;
@@ -45,9 +46,12 @@ console_init(void)
      * Set input mode: enable window events, disable line input and echo.
      * Do NOT enable VT input here, as it intercepts KEY_EVENT records
      * making our input loops starve. We process keys manually via ReadConsoleInputW.
+     * Note: ENABLE_MOUSE_INPUT prevents native text selection — use Shift+drag
+     * in Windows Terminal to select text while mouse mode is active.
      */
     in_mode = (saved_in_mode | ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT)
               & ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_VIRTUAL_TERMINAL_INPUT);
+    mouse_enabled = 1;
 
     if (!SetConsoleMode(console_in, in_mode)) {
         log_warn("console_init: SetConsoleMode input failed: %lu (continuing with saved mode)",
@@ -82,6 +86,23 @@ console_init(void)
     console_initialized = 1;
     log_debug("console_init: %dx%d", last_cols, last_rows);
     return 0;
+}
+
+void
+console_set_mouse(int enabled)
+{
+    DWORD mode;
+
+    if (!console_initialized)
+        return;
+
+    GetConsoleMode(console_in, &mode);
+    if (enabled)
+        mode |= ENABLE_MOUSE_INPUT;
+    else
+        mode &= ~ENABLE_MOUSE_INPUT;
+    SetConsoleMode(console_in, mode);
+    mouse_enabled = enabled;
 }
 
 void
@@ -300,30 +321,14 @@ console_read(void *buf, size_t len)
 int
 console_write(const void *buf, size_t len)
 {
-    DWORD written, chunk_written;
-    const char *p = buf;
-    size_t remaining = len;
+    DWORD written;
 
     if (!console_initialized)
         return -1;
 
-    written = 0;
-    while (remaining > 0) {
-        DWORD chunk = (remaining > 32768) ? 32768 : (DWORD)remaining;
-        
-        if (!WriteConsoleA(console_out, p, chunk, &chunk_written, NULL)) {
-            /* Fallback */
-            if (!WriteFile(console_out, p, chunk, &chunk_written, NULL))
-                return -1;
-        }
-        
-        if (chunk_written == 0)
-            break;
-            
-        p += chunk_written;
-        remaining -= chunk_written;
-        written += chunk_written;
-    }
+    if (!WriteConsoleA(console_out, buf, (DWORD)len, &written, NULL))
+        if (!WriteFile(console_out, buf, (DWORD)len, &written, NULL))
+            return -1;
 
     return (int)written;
 }
@@ -356,10 +361,27 @@ console_check_resize(int *cols, int *rows)
     console_get_size(&new_cols, &new_rows);
 
     if (new_cols != last_cols || new_rows != last_rows) {
+        log_debug("console_check_resize: %dx%d -> %dx%d",
+            last_cols, last_rows, new_cols, new_rows);
         last_cols = new_cols;
         last_rows = new_rows;
         *cols = new_cols;
         *rows = new_rows;
+
+        /* Resize the screen buffer to match the viewport exactly.
+         * This prevents the console from auto-scrolling when the
+         * buffer is larger than the viewport. */
+        COORD buf_size;
+        buf_size.X = (SHORT)new_cols;
+        buf_size.Y = (SHORT)new_rows;
+        BOOL sb_ok = SetConsoleScreenBufferSize(console_out, buf_size);
+        log_debug("console_check_resize: SetConsoleScreenBufferSize(%d,%d) = %d",
+            new_cols, new_rows, sb_ok);
+
+        /* Reset the viewport to the top of the buffer */
+        SMALL_RECT rect = { 0, 0, (SHORT)(new_cols - 1), (SHORT)(new_rows - 1) };
+        BOOL wi_ok = SetConsoleWindowInfo(console_out, TRUE, &rect);
+        log_debug("console_check_resize: SetConsoleWindowInfo = %d", wi_ok);
         return 1;
     }
 

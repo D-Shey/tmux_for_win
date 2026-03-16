@@ -38,6 +38,21 @@ screen_resize(struct screen *s, uint32_t sx, uint32_t sy)
     if (sx < 1) sx = 1;
     if (sy < 1) sy = 1;
 
+    log_debug("screen_resize: %ux%u -> %ux%u, hsize=%u, cx=%u cy=%u, "
+        "in_alt=%d",
+        s->grid->sx, s->grid->sy, sx, sy, s->grid->hsize, s->cx, s->cy,
+        s->in_alt);
+
+    /*
+     * Do NOT push/pull history lines here.  ConPTY handles reflow
+     * internally and sends VT output to reposition content.  If we
+     * also adjust hsize, the two adjustments conflict and the visible
+     * area shifts incorrectly (the "auto-scroll on resize" bug).
+     *
+     * Just resize the grid dimensions and let ConPTY reflow set the
+     * correct cursor position via input_parse.
+     */
+
     grid_resize(s->grid, sx, sy);
 
     /* If in alt screen, also resize the saved main grid */
@@ -51,6 +66,9 @@ screen_resize(struct screen *s, uint32_t sx, uint32_t sy)
         s->cx = sx - 1;
     if (s->cy >= sy)
         s->cy = sy - 1;
+
+    log_debug("screen_resize: END grid=%ux%u, hsize=%u, cx=%u cy=%u",
+        s->grid->sx, s->grid->sy, s->grid->hsize, s->cx, s->cy);
 }
 
 void

@@ -18,7 +18,7 @@
  * ========================================================================= */
 
 #ifndef TMUX_VERSION
-#define TMUX_VERSION "0.1.0-win"
+#define TMUX_VERSION "3.3a"
 #endif
 
 #define TMUX_CONF "~\\.tmux.conf"
@@ -230,6 +230,16 @@ struct window_pane {
 #define PANE_DEAD           0x01
 #define PANE_REDRAW         0x02
 #define PANE_FOCUSED        0x04
+#define PANE_COPY_MODE      0x08
+
+    uint32_t                scroll_offset;  /* lines scrolled back into history (0 = live view) */
+
+    /* Copy mode state (valid when PANE_COPY_MODE is set) */
+    int                     copy_cx;        /* cursor column in viewport */
+    int                     copy_cy;        /* cursor row in viewport */
+    int                     copy_sel;       /* 1 if selection is active */
+    uint32_t                copy_sel_abs;   /* absolute grid line of selection start */
+    uint32_t                copy_sel_x;     /* column of selection start */
 
     char                   *cmd;    /* command running in pane */
     char                   *cwd;    /* working directory */
@@ -317,6 +327,8 @@ struct client {
 #define CLIENT_DEAD         0x04
 #define CLIENT_IDENTIFIED   0x08
 #define CLIENT_REDRAW       0x10
+#define CLIENT_CLEARSCREEN  0x20    /* clear terminal before next render (after resize) */
+#define CLIENT_RESIZE_PENDING 0x40  /* resize happened; wait for ConPTY reflow before render */
 
     char                   *ttyname;
 
@@ -343,6 +355,9 @@ struct tmux_server {
 
     int                     running;
     char                   *socket_path;
+
+    char                   *copy_buffer;     /* last copied text */
+    uint32_t                copy_buffer_len;
 };
 
 extern struct tmux_server server;
@@ -504,6 +519,8 @@ void grid_clear_lines(struct grid *, uint32_t, uint32_t,
 void grid_set_cell(struct grid *, uint32_t, uint32_t,
     const struct grid_cell *);
 void grid_get_cell(struct grid *, uint32_t, uint32_t, struct grid_cell *);
+void grid_get_cell_abs(struct grid *, uint32_t px, uint32_t abs_line,
+    struct grid_cell *);
 void grid_scroll_up(struct grid *, const struct grid_cell *);
 void grid_scroll_down(struct grid *, const struct grid_cell *);
 void grid_resize(struct grid *, uint32_t, uint32_t);
@@ -587,6 +604,15 @@ struct winlink *session_new_window(struct session *, int, const char *,
     const char *);
 void session_select_window(struct session *, int);
 struct winlink *session_find_window(struct session *, int);
+
+/* =========================================================================
+ * Function declarations - copy_mode.c
+ * ========================================================================= */
+
+void copy_mode_enter(struct window_pane *);
+void copy_mode_exit(struct window_pane *);
+void copy_mode_handle_key(struct window_pane *, struct client *,
+    const unsigned char *, int);
 
 /* =========================================================================
  * Function declarations - server.c

@@ -141,6 +141,28 @@ grid_get_cell(struct grid *gd, uint32_t px, uint32_t py,
 }
 
 /*
+ * Get a cell using an absolute line index into linedata (history + screen).
+ * Unlike grid_get_cell(), abs_line here is 0-based from the start of linedata.
+ */
+void
+grid_get_cell_abs(struct grid *gd, uint32_t px, uint32_t abs_line,
+    struct grid_cell *gc)
+{
+    struct grid_line *gl;
+
+    if (abs_line >= gd->linealloc) {
+        grid_default_cell(gc);
+        return;
+    }
+    gl = &gd->linedata[abs_line];
+    if (px >= gl->cellused) {
+        grid_default_cell(gc);
+        return;
+    }
+    memcpy(gc, &gl->cells[px], sizeof(*gc));
+}
+
+/*
  * Clear a rectangular area.
  */
 void
@@ -187,6 +209,7 @@ void
 grid_scroll_up(struct grid *gd, const struct grid_cell *defaults)
 {
     struct grid_cell def;
+    uint32_t old_hsize = gd->hsize;
 
     if (defaults == NULL) {
         grid_default_cell(&def);
@@ -200,10 +223,14 @@ grid_scroll_up(struct grid *gd, const struct grid_cell *defaults)
             (gd->hsize + gd->sy - 1) * sizeof(*gd->linedata));
         memset(&gd->linedata[gd->hsize + gd->sy - 1], 0,
             sizeof(*gd->linedata));
+        log_debug("grid_scroll_up: history full (%u/%u), evicted oldest",
+            gd->hsize, gd->hlimit);
     } else {
         /* Add to history */
         gd->hsize++;
         grid_ensure_lines(gd, gd->hsize + gd->sy);
+        log_debug("grid_scroll_up: hsize %u -> %u (hlimit=%u)",
+            old_hsize, gd->hsize, gd->hlimit);
     }
 
     /* Clear the new bottom line */
@@ -244,7 +271,13 @@ grid_scroll_down(struct grid *gd, const struct grid_cell *defaults)
 void
 grid_resize(struct grid *gd, uint32_t sx, uint32_t sy)
 {
+    uint32_t old_sx = gd->sx;
     uint32_t old_sy = gd->sy;
+
+    log_debug("grid_resize: %ux%u -> %ux%u, hsize=%u, hlimit=%u, "
+        "linealloc=%u, total_lines=%u",
+        old_sx, old_sy, sx, sy, gd->hsize, gd->hlimit,
+        gd->linealloc, gd->hsize + gd->sy);
 
     /* If growing vertically, ensure space */
     if (sy > old_sy) {

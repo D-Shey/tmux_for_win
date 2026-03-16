@@ -38,6 +38,7 @@ static const struct {
     { "]",      "paste-buffer" },
     { "z",      "resize-pane -Z" },
     { "!",      "break-pane" },
+    { "m",      "toggle-mouse" },
     { NULL,     NULL }
 };
 

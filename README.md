@@ -57,9 +57,6 @@ By default, no log files are created. Pass `-v` to enable logging:
 # INFO level — creates tmux-client.log and tmux-server.log next to the binary
 ./build/Debug/tmux.exe -v
 
-# DEBUG level — more verbose output
-./build/Debug/tmux.exe -v -v
-```
 
 The `-v` flag is automatically forwarded to the server process when it is spawned.
 
@@ -75,6 +72,9 @@ The default prefix is `Ctrl-b` (standard for tmux).
 | **Close Pane** | ✅ Implemented | `Ctrl-b x` |
 | **Switch Pane** | ✅ Implemented | `Ctrl-b o` |
 | **Detach** | ✅ Implemented | `Ctrl-b d` |
+| **Copy Mode** | ✅ Implemented | `Ctrl-b [` |
+| **Paste Buffer** | ✅ Implemented | `Ctrl-b ]` |
+| **Toggle Mouse** | ✅ Implemented | `Ctrl-b m` |
 
 ---
 
@@ -90,6 +90,19 @@ Panes allow you to split the space of a single window into multiple parts.
 - `Ctrl-b %` — split vertically (left/right).
 - `Ctrl-b o` — move to the next pane.
 - `Ctrl-b x` — close the current pane.
+
+#### Copy Mode — `Ctrl-b [`
+Copy mode lets you scroll through the pane's history and copy text without using the mouse.
+
+- `Ctrl-b [` — enter copy mode.
+- `↑ ↓ ← →` or `h j k l` — move cursor.
+- `PgUp` / `PgDn` — scroll a full page.
+- `u` / `d` — scroll half a page (vim-style).
+- `g` / `G` — jump to top / bottom of history.
+- `Space` — start selection (press again to cancel).
+- `Enter` — copy selection and exit. Text is placed in both the tmux paste buffer **and the Windows clipboard**.
+- `q` / `Escape` — exit without copying.
+- `Ctrl-b ]` — paste the buffer into the active pane.
 
 ```text
   ┌─────────────────────┐     ┌──────────┬──────────┐

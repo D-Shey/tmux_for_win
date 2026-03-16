@@ -8,7 +8,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 add_definitions(-D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00)
 add_definitions(-DUNICODE -D_UNICODE)
 add_definitions(-D_CRT_SECURE_NO_WARNINGS)
-add_definitions(-DTMUX_VERSION="0.1.0-win")
+add_definitions(-DTMUX_VERSION="3.3a")
 
 set(PLATFORM_SOURCES
     src/platform/win32_conpty.c
@@ -40,6 +40,7 @@ set(ENGINE_SOURCES
     src/cmd.c
     src/key.c
     src/options.c
+    src/copy_mode.c
 )
 
 set(ALL_SOURCES
