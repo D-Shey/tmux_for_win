@@ -243,7 +243,7 @@ Copy mode lets you scroll through a pane's output history and copy text without 
 
 Paste with `Ctrl-b ]`.
 
-> **Note**: When mouse is enabled, use **Shift+drag** in Windows Terminal to select text natively.
+> **Tip**: When mouse is enabled, hold **Shift** and drag to select visible text directly in Windows Terminal — no need to enter copy mode. The selected text goes straight to the Windows clipboard.
 
 ---
 
