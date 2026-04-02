@@ -223,6 +223,14 @@ The default prefix key is `Ctrl-b`. All bindings below require pressing the pref
 
 ### Copy Mode (`Ctrl-b [`)
 
+Copy mode lets you scroll through a pane's output history and copy text without using the mouse. The pane is frozen while copy mode is active — the running program is not affected.
+
+1. Press `Ctrl-b [` to enter copy mode. The cursor appears in the pane.
+2. Navigate to the text you want using the movement keys below.
+3. Press `Space` to start a selection, move to extend it.
+4. Press `Enter` to copy — the text goes to the tmux paste buffer **and** the Windows clipboard.
+5. Press `Ctrl-b ]` in any pane to paste from the buffer.
+
 | Key | Action |
 |-----|--------|
 | `↑↓←→` / `hjkl` | Move cursor |
