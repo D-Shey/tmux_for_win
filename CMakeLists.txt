@@ -40,6 +40,7 @@ set(ENGINE_SOURCES
     src/cmd.c
     src/key.c
     src/options.c
+    src/cfg.c
     src/copy_mode.c
 )
 

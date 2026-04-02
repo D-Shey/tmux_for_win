@@ -31,7 +31,13 @@ pane_create(struct window *w, uint32_t sx, uint32_t sy,
     wp->cwd = xstrdup(cwd ? cwd : proc_get_cwd());
 
     /* Initialize screen and input parser */
-    screen_init(&wp->screen, sx, sy, HISTORY_DEFAULT);
+    {
+        int hlimit = (global_options != NULL)
+            ? options_get_number(global_options, "history-limit")
+            : HISTORY_DEFAULT;
+        if (hlimit <= 0) hlimit = HISTORY_DEFAULT;
+        screen_init(&wp->screen, sx, sy, (uint32_t)hlimit);
+    }
     wp->ictx = input_init(&wp->screen);
     input_set_write_cb(wp->ictx, pane_write_cb, wp);
 

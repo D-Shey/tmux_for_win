@@ -331,7 +331,12 @@ server_render_client(struct client *c)
 int
 server_start(const char *pipe_path)
 {
+    char   **causes = NULL;
+    int      ncauses = 0, i;
+    char    *expanded_cfg;
+
     memset(&server, 0, sizeof(server));
+    server.prefix_key = DEFAULT_PREFIX_KEY;
 
     /* log is already opened in main.c before daemonizing */
     log_info("server_start: starting server on %s", pipe_path);
@@ -348,10 +353,45 @@ server_start(const char *pipe_path)
     key_init();
     global_options = options_create(NULL);
 
-    /* Set some default options */
+    /* Set default options */
     options_set_number(global_options, "history-limit", HISTORY_DEFAULT);
     options_set_string(global_options, "default-shell",
         proc_get_default_shell());
+    options_set_string(global_options, "prefix", "C-b");
+    options_set_number(global_options, "escape-time", 500);
+    options_set_number(global_options, "mouse", 1);
+    options_set_number(global_options, "status", 1);
+    options_set_number(global_options, "base-index", 0);
+
+    /* Load config file */
+    expanded_cfg = cfg_expand_path(cfg_file != NULL ? cfg_file : TMUX_CONF);
+    if (expanded_cfg != NULL) {
+        int quiet = (cfg_file == NULL);  /* silent for default ~/.tmux.conf */
+
+        /* On first run, create a default config with comments */
+        if (cfg_file == NULL) {
+            FILE *test = fopen(expanded_cfg, "r");
+            if (test == NULL) {
+                if (cfg_write_default(expanded_cfg) == 0)
+                    log_info("server_start: created default config at %s",
+                        expanded_cfg);
+            } else {
+                fclose(test);
+            }
+        }
+
+        log_info("server_start: loading config from %s", expanded_cfg);
+        cfg_load(expanded_cfg, quiet, &causes, &ncauses);
+        for (i = 0; i < ncauses; i++) {
+            log_warn("config: %s", causes[i]);
+            free(causes[i]);
+        }
+        free(causes);
+        free(expanded_cfg);
+    }
+
+    /* Apply options to runtime state (sets server.prefix_key etc.) */
+    options_apply(global_options);
 
     server.running = 1;
     server.socket_path = xstrdup(pipe_path);
@@ -477,27 +517,77 @@ server_loop(void)
                         }
                     }
 
-                    /* Send ready */
-                    pipe_msg_send(c->pipe, MSG_READY, NULL, 0);
+                    /* Send ready with runtime settings */
+                    {
+                        struct msg_ready_data rd;
+                        rd.prefix_key  = server.prefix_key;
+                        rd.escape_time = (uint32_t)options_get_number(
+                            global_options, "escape-time");
+                        rd.mouse_on    = (uint8_t)options_get_number(
+                            global_options, "mouse");
+                        pipe_msg_send(c->pipe, MSG_READY,
+                            &rd, (uint32_t)sizeof(rd));
+                    }
                     c->flags |= CLIENT_REDRAW;
                     break;
                 }
                 case MSG_KEY: {
                     if (data && len > 0 && c->session &&
                         c->session->curw && c->session->curw->window) {
-                        struct window *w = c->session->curw->window;
+                        struct window      *w = c->session->curw->window;
+                        const unsigned char *bytes = (const unsigned char *)data;
+                        uint32_t             i;
+
                         if (w->active && !(w->active->flags & PANE_DEAD)) {
                             if (w->active->flags & PANE_COPY_MODE) {
-                                /* Copy mode: handle key locally */
-                                copy_mode_handle_key(w->active, c,
-                                    (const unsigned char *)data, (int)len);
+                                /* Copy mode swallows all keys directly */
+                                copy_mode_handle_key(w->active, c, bytes, (int)len);
                             } else {
                                 /* Return to live view on any keypress */
                                 if (w->active->scroll_offset > 0) {
                                     w->active->scroll_offset = 0;
                                     c->flags |= CLIENT_REDRAW;
                                 }
-                                pane_write(w->active, data, len);
+
+                                /*
+                                 * Server-side prefix detection.
+                                 * The client forwards raw bytes; we do the
+                                 * key-table lookup here so that bind/unbind
+                                 * from config files work without restarting
+                                 * the client.
+                                 */
+                                for (i = 0; i < len; ) {
+                                    unsigned char byte = bytes[i];
+
+                                    if (c->prefix_mode) {
+                                        const char *cmd;
+                                        c->prefix_mode = 0;
+                                        cmd = key_lookup("prefix",
+                                            (key_code)byte);
+                                        if (cmd != NULL) {
+                                            if (strcmp(cmd, "toggle-mouse") == 0) {
+                                                int m = options_get_number(
+                                                    global_options, "mouse");
+                                                options_set_number(global_options,
+                                                    "mouse", !m);
+                                                server_notify_settings();
+                                            } else {
+                                                server_handle_command(c, cmd);
+                                            }
+                                        } else {
+                                            /* No binding - pass byte to pane */
+                                            pane_write(w->active, &byte, 1);
+                                        }
+                                        i++;
+                                    } else if (byte == (unsigned char)server.prefix_key) {
+                                        c->prefix_mode = 1;
+                                        i++;
+                                    } else {
+                                        /* Forward remaining bytes to pane */
+                                        pane_write(w->active, bytes + i, len - i);
+                                        break;
+                                    }
+                                }
                                 c->flags |= CLIENT_REDRAW;
                             }
                         }
@@ -870,6 +960,29 @@ void
 server_redraw_client(struct client *c)
 {
     c->flags |= CLIENT_REDRAW;
+}
+
+/*
+ * Push current runtime settings to all connected clients by re-sending
+ * MSG_READY. Called after set-option or source-file changes the prefix,
+ * escape-time, or mouse setting so that clients update immediately without
+ * needing to reconnect.
+ */
+void
+server_notify_settings(void)
+{
+    struct client          *c;
+    struct msg_ready_data   rd;
+
+    rd.prefix_key  = server.prefix_key;
+    rd.escape_time = (uint32_t)options_get_number(global_options, "escape-time");
+    rd.mouse_on    = (uint8_t)options_get_number(global_options, "mouse");
+
+    for (c = server.clients; c != NULL; c = c->next) {
+        if (c->flags & CLIENT_DEAD)
+            continue;
+        pipe_msg_send(c->pipe, MSG_READY, &rd, (uint32_t)sizeof(rd));
+    }
 }
 
 void

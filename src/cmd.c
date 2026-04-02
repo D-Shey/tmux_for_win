@@ -30,6 +30,10 @@ static int cmd_rename_window(struct cmd_ctx *);
 static int cmd_list_windows_cmd(struct cmd_ctx *);
 static int cmd_copy_mode(struct cmd_ctx *);
 static int cmd_paste_buffer(struct cmd_ctx *);
+static int cmd_bind_key(struct cmd_ctx *);
+static int cmd_unbind_key(struct cmd_ctx *);
+static int cmd_source_file(struct cmd_ctx *);
+static int cmd_show_options(struct cmd_ctx *);
 
 /* Command table */
 static const struct cmd_entry cmd_table[] = {
@@ -75,7 +79,7 @@ static const struct cmd_entry cmd_table[] = {
         cmd_list_panes },
     { "select-layout",      "selectl",  "[-t target] [layout]",
         cmd_select_layout },
-    { "set-option",         "set",      "[-p] [-w] [-t target] option value",
+    { "set-option",         "set",      "[-gswu] option [value]",
         cmd_set_option },
     { "has-session",        "has",      "[-t target]",
         cmd_has_session },
@@ -85,6 +89,14 @@ static const struct cmd_entry cmd_table[] = {
         cmd_copy_mode },
     { "paste-buffer",       "pasteb",   "[-t target]",
         cmd_paste_buffer },
+    { "bind-key",           "bind",     "[-T table] key [command [args...]]",
+        cmd_bind_key },
+    { "unbind-key",         "unbind",   "[-T table] key",
+        cmd_unbind_key },
+    { "source-file",        "source",   "[-q] path",
+        cmd_source_file },
+    { "show-options",       "show",     "[-g]",
+        cmd_show_options },
     { NULL, NULL, NULL, NULL }
 };
 
@@ -999,8 +1011,30 @@ cmd_list_windows(struct cmd_ctx *ctx)
 static int
 cmd_list_keys(struct cmd_ctx *ctx)
 {
-    /* TODO: list all key bindings */
-    (void)ctx;
+    struct key_table   *kt;
+    struct key_binding *kb;
+    char               *msg = NULL, *line, *tmp;
+
+    for (kt = key_get_tables(); kt != NULL; kt = kt->next) {
+        for (kb = kt->bindings; kb != NULL; kb = kb->next) {
+            xasprintf(&line, "bind-key -T %s %s %s\n",
+                kt->name,
+                key_code_to_string(kb->key),
+                kb->cmd);
+            if (msg == NULL) {
+                msg = line;
+            } else {
+                xasprintf(&tmp, "%s%s", msg, line);
+                free(msg); free(line);
+                msg = tmp;
+            }
+        }
+    }
+
+    if (msg != NULL && ctx->client != NULL)
+        pipe_msg_send(ctx->client->pipe, MSG_DATA, msg,
+            (uint32_t)strlen(msg));
+    free(msg);
     return 0;
 }
 
@@ -1327,8 +1361,85 @@ cmd_select_layout(struct cmd_ctx *ctx)
 static int
 cmd_set_option(struct cmd_ctx *ctx)
 {
-    /* Stub: options engine not implemented, return success */
-    (void)ctx;
+    const struct options_table_entry *oe;
+    int  i, unset = 0;
+    char *opt_name = NULL, *opt_value = NULL;
+    long  num;
+
+    /* Scan argv for flags and positional args */
+    for (i = 1; i < ctx->argc; i++) {
+        if (ctx->argv[i][0] == '-') {
+            /* Flags: -g (global), -s (server), -w (window), -u (unset) */
+            const char *f = ctx->argv[i] + 1;
+            while (*f) {
+                if (*f == 'u') unset = 1;
+                /* -g/-s/-w all treated as global for now */
+                f++;
+            }
+        } else {
+            if (opt_name == NULL)
+                opt_name = ctx->argv[i];
+            else if (opt_value == NULL)
+                opt_value = ctx->argv[i];
+        }
+    }
+
+    if (opt_name == NULL) {
+        xasprintf(&ctx->error, "set-option: missing option name");
+        return -1;
+    }
+
+    oe = options_table_find(opt_name);
+    if (oe == NULL) {
+        xasprintf(&ctx->error, "set-option: unknown option: %s", opt_name);
+        return -1;
+    }
+
+    if (unset) {
+        options_remove(global_options, opt_name);
+        options_apply(global_options);
+        return 0;
+    }
+
+    if (opt_value == NULL) {
+        xasprintf(&ctx->error, "set-option: missing value for %s", opt_name);
+        return -1;
+    }
+
+    switch (oe->type) {
+    case OPTION_STRING:
+        options_set_string(global_options, opt_name, opt_value);
+        break;
+    case OPTION_NUMBER:
+        num = atol(opt_value);
+        if (num < oe->minimum || num > oe->maximum) {
+            xasprintf(&ctx->error,
+                "set-option: value %ld out of range [%d, %d] for %s",
+                num, oe->minimum, oe->maximum, opt_name);
+            return -1;
+        }
+        options_set_number(global_options, opt_name, (int)num);
+        break;
+    case OPTION_FLAG:
+        if (strcmp(opt_value, "on") == 0 || strcmp(opt_value, "1") == 0 ||
+            strcmp(opt_value, "yes") == 0 || strcmp(opt_value, "true") == 0)
+            options_set_number(global_options, opt_name, 1);
+        else if (strcmp(opt_value, "off") == 0 || strcmp(opt_value, "0") == 0 ||
+            strcmp(opt_value, "no") == 0 || strcmp(opt_value, "false") == 0)
+            options_set_number(global_options, opt_name, 0);
+        else {
+            xasprintf(&ctx->error,
+                "set-option: invalid flag value '%s' (use on/off)", opt_value);
+            return -1;
+        }
+        break;
+    default:
+        xasprintf(&ctx->error, "set-option: unsupported option type for %s",
+            opt_name);
+        return -1;
+    }
+
+    options_apply(global_options);
     return 0;
 }
 
@@ -1402,5 +1513,196 @@ cmd_paste_buffer(struct cmd_ctx *ctx)
         return -1;
     }
     pane_write(wp, server.copy_buffer, server.copy_buffer_len);
+    return 0;
+}
+
+static int
+cmd_bind_key(struct cmd_ctx *ctx)
+{
+    const char *table = "prefix";
+    key_code    kc;
+    char       *cmd_str = NULL;
+    int         i;
+    size_t      len;
+
+    /* Parse -T table */
+    for (i = 1; i < ctx->argc; i++) {
+        if (strcmp(ctx->argv[i], "-T") == 0 && i + 1 < ctx->argc) {
+            table = ctx->argv[++i];
+        } else if (ctx->argv[i][0] != '-') {
+            break;
+        }
+    }
+
+    if (i >= ctx->argc) {
+        xasprintf(&ctx->error, "bind-key: missing key");
+        return -1;
+    }
+
+    kc = key_string_to_code(ctx->argv[i++]);
+    if (kc == KEYC_NONE) {
+        xasprintf(&ctx->error, "bind-key: unknown key: %s",
+            ctx->argv[i - 1]);
+        return -1;
+    }
+
+    if (i >= ctx->argc) {
+        /* No command: remove binding */
+        key_unbind(table, kc);
+        return 0;
+    }
+
+    /* Join remaining argv into a command string */
+    len = 0;
+    for (int j = i; j < ctx->argc; j++)
+        len += strlen(ctx->argv[j]) + 1;
+    cmd_str = xmalloc(len + 1);
+    cmd_str[0] = '\0';
+    for (int j = i; j < ctx->argc; j++) {
+        if (j > i) strcat(cmd_str, " ");
+        strcat(cmd_str, ctx->argv[j]);
+    }
+
+    key_bind(table, kc, cmd_str);
+    free(cmd_str);
+    return 0;
+}
+
+static int
+cmd_unbind_key(struct cmd_ctx *ctx)
+{
+    const char *table = "prefix";
+    key_code    kc;
+    int         i;
+
+    /* Parse -T table */
+    for (i = 1; i < ctx->argc; i++) {
+        if (strcmp(ctx->argv[i], "-T") == 0 && i + 1 < ctx->argc) {
+            table = ctx->argv[++i];
+        } else if (ctx->argv[i][0] != '-') {
+            break;
+        }
+    }
+
+    if (i >= ctx->argc) {
+        xasprintf(&ctx->error, "unbind-key: missing key");
+        return -1;
+    }
+
+    kc = key_string_to_code(ctx->argv[i]);
+    if (kc == KEYC_NONE) {
+        xasprintf(&ctx->error, "unbind-key: unknown key: %s", ctx->argv[i]);
+        return -1;
+    }
+
+    key_unbind(table, kc);
+    return 0;
+}
+
+static int
+cmd_source_file(struct cmd_ctx *ctx)
+{
+    static int    depth = 0;
+    int           quiet = 0;
+    const char   *path = NULL;
+    char         *expanded;
+    char        **causes = NULL;
+    int           ncauses = 0, i;
+
+    for (i = 1; i < ctx->argc; i++) {
+        if (strcmp(ctx->argv[i], "-q") == 0)
+            quiet = 1;
+        else if (ctx->argv[i][0] != '-' && path == NULL)
+            path = ctx->argv[i];
+    }
+
+    if (path == NULL) {
+        xasprintf(&ctx->error, "source-file: missing path");
+        return -1;
+    }
+
+    if (depth >= 15) {
+        xasprintf(&ctx->error, "source-file: too many nested source-file calls");
+        return -1;
+    }
+
+    expanded = cfg_expand_path(path);
+    if (expanded == NULL) {
+        if (!quiet) {
+            xasprintf(&ctx->error, "source-file: cannot expand path: %s", path);
+            return -1;
+        }
+        return 0;
+    }
+
+    depth++;
+    cfg_load(expanded, quiet, &causes, &ncauses);
+    depth--;
+
+    free(expanded);
+
+    for (i = 0; i < ncauses; i++) {
+        if (ctx->client != NULL)
+            pipe_msg_send(ctx->client->pipe, MSG_DATA, causes[i],
+                (uint32_t)strlen(causes[i]));
+        else
+            log_warn("%s", causes[i]);
+        free(causes[i]);
+    }
+    free(causes);
+    return 0;
+}
+
+static int
+cmd_show_options(struct cmd_ctx *ctx)
+{
+    const struct options_table_entry *oe;
+    struct option *opt;
+    char *msg = NULL, *line, *tmp;
+    int i;
+
+    (void)ctx;  /* -g flag accepted but we only have global options anyway */
+
+    /* Show all known options with their current or default values */
+    for (i = 0; options_table[i].name != NULL; i++) {
+        oe = &options_table[i];
+        opt = NULL;
+
+        /* Find in global_options list */
+        if (global_options != NULL) {
+            struct option *o;
+            for (o = global_options->list; o != NULL; o = o->next) {
+                if (strcmp(o->name, oe->name) == 0) {
+                    opt = o;
+                    break;
+                }
+            }
+        }
+
+        if (oe->type == OPTION_STRING) {
+            const char *val = (opt != NULL) ? opt->value.str :
+                (oe->default_str ? oe->default_str : "");
+            xasprintf(&line, "%s \"%s\"\n", oe->name, val);
+        } else {
+            int val = (opt != NULL) ? opt->value.num : oe->default_num;
+            if (oe->type == OPTION_FLAG)
+                xasprintf(&line, "%s %s\n", oe->name, val ? "on" : "off");
+            else
+                xasprintf(&line, "%s %d\n", oe->name, val);
+        }
+
+        if (msg == NULL) {
+            msg = line;
+        } else {
+            xasprintf(&tmp, "%s%s", msg, line);
+            free(msg); free(line);
+            msg = tmp;
+        }
+    }
+
+    if (msg != NULL && ctx->client != NULL)
+        pipe_msg_send(ctx->client->pipe, MSG_DATA, msg,
+            (uint32_t)strlen(msg));
+    free(msg);
     return 0;
 }

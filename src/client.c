@@ -31,7 +31,22 @@ client_handle_message(enum tmux_msg_type type, void *data, uint32_t len)
 {
     switch (type) {
     case MSG_READY:
-        log_debug("client: server is ready");
+        if (data != NULL && len >= (uint32_t)sizeof(struct msg_ready_data)) {
+            struct msg_ready_data *rd = (struct msg_ready_data *)data;
+            if ((int)rd->mouse_on != client_mouse_enabled) {
+                client_mouse_enabled = rd->mouse_on;
+                console_set_mouse(client_mouse_enabled);
+                /* Also toggle VT SGR mouse tracking */
+                if (client_mouse_enabled)
+                    console_write("\033[?1002h\033[?1006h", 16);
+                else
+                    console_write("\033[?1002l\033[?1006l", 16);
+            }
+            log_info("client: server ready — prefix=0x%x escape_time=%u mouse=%d",
+                rd->prefix_key, rd->escape_time, rd->mouse_on);
+        } else {
+            log_info("client: server ready");
+        }
         client_attached = 1;
         break;
 
@@ -164,22 +179,6 @@ client_extract_mouse(unsigned char *buf, int len)
 }
 
 /*
- * Toggle mouse mode on/off.
- * Enables/disables both Win32 ENABLE_MOUSE_INPUT and VT SGR mouse tracking.
- */
-static void
-client_toggle_mouse(void)
-{
-    client_mouse_enabled = !client_mouse_enabled;
-    console_set_mouse(client_mouse_enabled);
-    if (client_mouse_enabled)
-        console_write("\033[?1002h\033[?1006h", 16);
-    else
-        console_write("\033[?1002l\033[?1006l", 16);
-    log_info("client: mouse mode %s", client_mouse_enabled ? "on" : "off");
-}
-
-/*
  * Client main loop for an attached session.
  */
 static int
@@ -187,9 +186,6 @@ client_loop(void)
 {
     HANDLE          handles[3];
     unsigned char   input_buf[4096];
-    key_code        prefix_key = DEFAULT_PREFIX_KEY;
-    int             prefix_mode = 0;
-    uint64_t        prefix_time = 0;
 
     client_running = 1;
     client_attached = 0;
@@ -203,13 +199,12 @@ client_loop(void)
         handles[nhandles++] = console_get_input_handle();
         handles[nhandles++] = pipe_client_get_event(client_pipe);
 
-        DWORD result = WaitForMultipleObjects(nhandles, handles,
-            FALSE, 100);
+        WaitForMultipleObjects(nhandles, handles, FALSE, 100);
 
         /* Check for console input */
         int nread = console_read(input_buf, sizeof(input_buf));
 
-        /* Extract VT SGR mouse sequences before key processing (Windows Terminal) */
+        /* Extract VT SGR mouse sequences (Windows Terminal injects them) */
         if (nread > 0 && client_attached)
             nread = client_extract_mouse(input_buf, nread);
 
@@ -224,52 +219,15 @@ client_loop(void)
             }
         }
 
-        if (nread > 0) {
-            if (client_attached) {
-                unsigned char *p = input_buf;
-                int remaining = nread;
-
-                while (remaining > 0) {
-                    if (prefix_mode) {
-                        /* In prefix mode: lookup key binding */
-                        key_code key = (key_code)*p;
-                        const char *cmd = key_lookup("prefix", key);
-
-                        if (cmd != NULL) {
-                            /* toggle-mouse is a client-side command */
-                            if (strcmp(cmd, "toggle-mouse") == 0) {
-                                client_toggle_mouse();
-                            } else {
-                                pipe_msg_send(client_pipe, MSG_COMMAND,
-                                    cmd, (uint32_t)strlen(cmd));
-                            }
-                        } else {
-                            /* Unknown prefix key - send as input */
-                            pipe_msg_send(client_pipe, MSG_KEY, p, 1);
-                        }
-
-                        prefix_mode = 0;
-                        p++;
-                        remaining--;
-                    } else if (*p == prefix_key) {
-                        /* Prefix key pressed */
-                        prefix_mode = 1;
-                        prefix_time = proc_get_time_ms();
-                        p++;
-                        remaining--;
-                    } else {
-                        /* Normal input - send to server */
-                        pipe_msg_send(client_pipe, MSG_KEY,
-                            p, (uint32_t)remaining);
-                        remaining = 0;
-                    }
-                }
-            }
+        /*
+         * Forward raw input bytes to the server.  Prefix detection and
+         * key-table lookup happen server-side so that bind/unbind from
+         * config files take effect immediately without restarting the client.
+         */
+        if (nread > 0 && client_attached) {
+            pipe_msg_send(client_pipe, MSG_KEY,
+                input_buf, (uint32_t)nread);
         }
-
-        /* Prefix timeout (1.5 seconds) */
-        if (prefix_mode && proc_get_time_ms() - prefix_time > 1500)
-            prefix_mode = 0;
 
         /* Check for console resize */
         int new_cols, new_rows;
@@ -344,10 +302,22 @@ client_main(const char *pipe_path, int argc, char **argv)
                 *last_sep = L'\0';
         }
 
-        snprintf(cmd_line, sizeof(cmd_line),
-            "\"%s\"%s --server --pipe \"%s\"",
-            exe_path_mb, (log_get_level() >= 2 ? " -v -v" : log_get_level() >= 1 ? " -v" : ""),
-            pipe_path);
+        if (cfg_file != NULL) {
+            snprintf(cmd_line, sizeof(cmd_line),
+                "\"%s\"%s -f \"%s\" --server --pipe \"%s\"",
+                exe_path_mb,
+                (log_get_level() >= 2 ? " -v -v" :
+                    log_get_level() >= 1 ? " -v" : ""),
+                cfg_file,
+                pipe_path);
+        } else {
+            snprintf(cmd_line, sizeof(cmd_line),
+                "\"%s\"%s --server --pipe \"%s\"",
+                exe_path_mb,
+                (log_get_level() >= 2 ? " -v -v" :
+                    log_get_level() >= 1 ? " -v" : ""),
+                pipe_path);
+        }
 
         /* Launch server process */
         STARTUPINFOW si;
@@ -454,9 +424,6 @@ client_main(const char *pipe_path, int argc, char **argv)
         pipe_client_free(client_pipe);
         return 0;
     }
-
-    /* Initialize key bindings (needed for prefix key lookup) */
-    key_init();
 
     /* No command - attach to session */
     if (console_init() != 0) {

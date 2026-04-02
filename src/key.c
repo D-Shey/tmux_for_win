@@ -262,6 +262,12 @@ key_unbind(const char *table, key_code key)
     }
 }
 
+struct key_table *
+key_get_tables(void)
+{
+    return key_tables;
+}
+
 const char *
 key_lookup(const char *table, key_code key)
 {

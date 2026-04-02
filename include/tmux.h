@@ -41,6 +41,9 @@
 /* Default prefix key: Ctrl-b */
 #define DEFAULT_PREFIX_KEY  0x02
 
+/* key_code forward typedef (full definition in Key handling section below) */
+typedef uint32_t key_code;
+
 /* =========================================================================
  * Colour handling
  * ========================================================================= */
@@ -332,6 +335,8 @@ struct client {
 
     char                   *ttyname;
 
+    int                     prefix_mode; /* 1 = prefix key was pressed, waiting for next key */
+
     struct screen           status;     /* status line screen */
 
     struct client          *next;
@@ -358,6 +363,8 @@ struct tmux_server {
 
     char                   *copy_buffer;     /* last copied text */
     uint32_t                copy_buffer_len;
+
+    key_code                prefix_key;      /* active prefix key (default: DEFAULT_PREFIX_KEY) */
 };
 
 extern struct tmux_server server;
@@ -366,7 +373,7 @@ extern struct tmux_server server;
  * Key handling
  * ========================================================================= */
 
-typedef uint32_t key_code;
+/* key_code is typedef'd earlier (before struct tmux_server) */
 
 #define KEYC_NONE           0xFFFF
 #define KEYC_UNKNOWN        0xFFFE
@@ -453,6 +460,16 @@ enum option_type {
     OPTION_NUMBER,
     OPTION_COLOUR,
     OPTION_FLAG,
+};
+
+/* Known option descriptor (for validation and defaults) */
+struct options_table_entry {
+    const char       *name;
+    enum option_type  type;
+    int               minimum;      /* NUMBER: min value */
+    int               maximum;      /* NUMBER: max value */
+    const char       *default_str;  /* STRING: default, or NULL */
+    int               default_num;  /* NUMBER/FLAG: default */
 };
 
 struct option {
@@ -624,6 +641,7 @@ void server_stop(void);
 void server_add_client(pipe_client_t *);
 void server_remove_client(struct client *);
 void server_redraw_client(struct client *);
+void server_notify_settings(void);
 void server_handle_command(struct client *, const char *);
 
 /* =========================================================================
@@ -644,6 +662,13 @@ int cmd_execute(const char *cmdstr, struct cmd_ctx *ctx);
 char **cmd_parse(const char *cmdstr, int *argc);
 void cmd_free_argv(char **argv, int argc);
 
+/* Payload for MSG_READY: server communicates runtime settings to client */
+struct msg_ready_data {
+    uint32_t prefix_key;    /* active prefix key code */
+    uint32_t escape_time;   /* escape-time option (ms) */
+    uint8_t  mouse_on;      /* initial mouse state */
+};
+
 /* =========================================================================
  * Function declarations - key.c
  * ========================================================================= */
@@ -655,6 +680,7 @@ void key_unbind(const char *table, key_code key);
 const char *key_lookup(const char *table, key_code key);
 key_code key_string_to_code(const char *str);
 const char *key_code_to_string(key_code key);
+struct key_table *key_get_tables(void);
 
 /* =========================================================================
  * Function declarations - options.c
@@ -666,12 +692,28 @@ void options_set_string(struct options *, const char *, const char *);
 void options_set_number(struct options *, const char *, int);
 const char *options_get_string(struct options *, const char *);
 int options_get_number(struct options *, const char *);
+void options_remove(struct options *, const char *);
+const struct options_table_entry *options_table_find(const char *);
+void options_apply(struct options *);
+
+extern const struct options_table_entry options_table[];
+
+/* =========================================================================
+ * Function declarations - cfg.c
+ * ========================================================================= */
+
+int  cfg_load(const char *path, int quiet, char ***causes, int *ncauses);
+int  cfg_write_default(const char *path);
+void cfg_add_cause(char ***causes, int *ncauses, const char *fmt, ...)
+    printflike(3, 4);
+char *cfg_expand_path(const char *path);
 
 /* =========================================================================
  * Global state (extern declarations)
  * ========================================================================= */
 
 extern struct options *global_options;
+extern const char     *cfg_file;  /* -f config path, or NULL for default */
 
 /* Cell border characters (Unicode box-drawing) */
 #define BORDER_H    "\xe2\x94\x80"  /* ─ */

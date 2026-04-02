@@ -2,11 +2,13 @@
 
 #include "tmux.h"
 
+const char *cfg_file = NULL;  /* -f config path, or NULL for default */
+
 static void
 usage(void)
 {
     fprintf(stderr,
-        "usage: tmux [-v] [-S socket-path] [command [flags]]\n"
+        "usage: tmux [-v] [-f config-file] [-S socket-path] [command [flags]]\n"
         "\n"
         "Commands:\n"
         "  new-session [-s name]      Create a new session\n"
@@ -50,6 +52,8 @@ main(int argc, char *argv[])
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--server") == 0) {
             server_mode = 1;
+        } else if (strcmp(argv[i], "-f") == 0 && i + 1 < argc) {
+            cfg_file = argv[++i];
         } else if (strcmp(argv[i], "--pipe") == 0 && i + 1 < argc) {
             pipe_path = argv[++i];
         } else if (strcmp(argv[i], "-S") == 0 && i + 1 < argc) {
